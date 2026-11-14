@@ -1,0 +1,13 @@
+# macOS
+.DS_Store
+
+# Xcode — особисті налаштування і збірки
+xcuserdata/
+DerivedData/
+build/
+
+# Python / бекенд
+backend/venv/
+__pycache__/
+.pytest_cache/
+backend/taskmanager.db

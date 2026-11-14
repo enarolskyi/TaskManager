@@ -11,7 +11,21 @@
     ],
   },
   "files": [
-    { "kind": "folder", "path": "TaskManager", "target-membership": [ "TaskManager" ] },
+    {
+      "kind": "folder",
+      "path": "TaskManager",
+      "target-membership": [
+        "TaskManager",
+      ],
+      "membership-exceptions": [
+        {
+          "target": "TaskManager",
+          "exclusions": [
+            "Info.plist",
+          ],
+        },
+      ],
+    },
     { "kind": "folder", "path": "TaskManagerTests", "target-membership": [ "TaskManagerTests" ] },
     { "kind": "folder", "path": "TaskManagerUITests", "target-membership": [ "TaskManagerUITests" ] },
     {
@@ -40,8 +54,10 @@
         "ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME": "AccentColor",
         "CODE_SIGN_STYLE": "Automatic",
         "CURRENT_PROJECT_VERSION": "1",
+        "DEVELOPMENT_TEAM": "ZQSU7C2QGZ",
         "ENABLE_PREVIEWS": "YES",
         "GENERATE_INFOPLIST_FILE": "YES",
+        "INFOPLIST_FILE": "TaskManager/Info.plist",
         "INFOPLIST_KEY_UIApplicationSceneManifest_Generation": "YES",
         "INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents": "YES",
         "INFOPLIST_KEY_UILaunchScreen_Generation": "YES",

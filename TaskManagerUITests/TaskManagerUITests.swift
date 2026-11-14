@@ -2,8 +2,6 @@
 //  TaskManagerUITests.swift
 //  TaskManagerUITests
 //
-//  Created by Tetiana  on 14.11.2026.
-//
 
 import XCTest
 
