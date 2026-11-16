@@ -21,9 +21,10 @@ struct MainTabView: View {
                 .tabItem { Label("More", systemImage: "ellipsis.circle") }
         }
         .tint(Color.appDark)
-        // Будь-яка зміна задач → перебудовуємо нагадування
+        // Будь-яка зміна задач → перебудовуємо нагадування й оновлюємо віджет
         .onChange(of: store.tasks, initial: true) { _, tasks in
             notifications.reschedule(for: tasks)
+            WidgetSync.update(with: tasks)
         }
         // Спільний алерт помилок для всіх вкладок
         .alert("Error", isPresented: errorBinding) {

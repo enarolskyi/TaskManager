@@ -74,6 +74,7 @@ struct RootView: View {
                 store.reset()
                 settingsStore.reset()
                 notifications.clear()
+                WidgetSync.clear()
                 router.reset()
             }
         }
