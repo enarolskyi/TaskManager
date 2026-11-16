@@ -55,6 +55,28 @@ final class AuthViewModel {
         }
     }
 
+    // MARK: - Скидання пароля (без логіну)
+
+    /// Сервер відповідає однаково для будь-якого email, тож помилка тут — лише мережева/валідація
+    func requestPasswordReset(email: String) async -> String? {
+        do {
+            try await api.postNoContent("/auth/forgot-password", body: ForgotPasswordRequest(email: email))
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    func resetPassword(email: String, code: String, newPassword: String) async -> String? {
+        do {
+            try await api.postNoContent("/auth/reset-password",
+                                        body: ResetPasswordRequest(email: email, code: code, newPassword: newPassword))
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
     func logout() async {
         try? await api.postNoContent("/auth/logout")   // виходимо локально, навіть якщо сервер недоступний
         forceLogout()

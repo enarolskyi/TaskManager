@@ -1,6 +1,7 @@
 """API tests. Кожен тест — на окремій тимчасовій БД."""
 import importlib
 import os
+import re
 
 import pytest
 from fastapi.testclient import TestClient
@@ -437,3 +438,111 @@ def test_migration_adds_new_columns(tmp_path):
     assert "completed_at" in task_cols
     assert {"daily_goal", "weekly_goal"} <= settings_cols
 
+
+
+# ---------- Password reset ----------
+
+@pytest.fixture
+def sent_emails(monkeypatch):
+    # Перехоплюємо "відправку" листів, щоб дістати код
+    import main
+    emails = []
+    monkeypatch.setattr(main, "send_email", lambda to, subject, body: emails.append({"to": to, "body": body}))
+    return emails
+
+
+def reset_code(emails):
+    return re.search(r"\b(\d{6})\b", emails[-1]["body"]).group(1)
+
+
+def request_reset(client, email="ed@test.com"):
+    return client.post("/auth/forgot-password", json={"email": email})
+
+
+def do_reset(client, code, new_password="NewPass123", email="ed@test.com"):
+    return client.post("/auth/reset-password", json={"email": email, "code": code, "new_password": new_password})
+
+
+def test_forgot_password_unknown_email_same_response(client, auth_headers, sent_emails):
+    known = request_reset(client)
+    unknown = request_reset(client, "nobody@test.com")
+    assert known.status_code == unknown.status_code == 200
+    assert known.json() == unknown.json()
+    assert len(sent_emails) == 1
+
+
+def test_reset_password_success(client, auth_headers, sent_emails):
+    request_reset(client, "ED@test.com")   # регістр email не важливий
+    assert do_reset(client, reset_code(sent_emails)).status_code == 204
+
+    assert client.post("/auth/login", json={"email": "ed@test.com", "password": "Test1234"}).status_code == 401
+    assert client.post("/auth/login", json={"email": "ed@test.com", "password": "NewPass123"}).status_code == 200
+    assert client.get("/me", headers=auth_headers).status_code == 401   # старі сесії інвалідовані
+
+
+def test_reset_code_is_single_use(client, auth_headers, sent_emails):
+    request_reset(client)
+    code = reset_code(sent_emails)
+    assert do_reset(client, code).status_code == 204
+    assert do_reset(client, code, "Another123").status_code == 400
+
+
+def test_reset_wrong_code(client, auth_headers, sent_emails):
+    request_reset(client)
+    code = reset_code(sent_emails)
+    wrong = "000000" if code != "000000" else "111111"
+    r = do_reset(client, wrong)
+    assert r.status_code == 400
+    assert r.json()["detail"] == "Invalid or expired code"
+
+
+def test_reset_too_many_attempts(client, auth_headers, sent_emails):
+    request_reset(client)
+    code = reset_code(sent_emails)
+    wrong = "000000" if code != "000000" else "111111"
+    for _ in range(5):
+        do_reset(client, wrong)
+    r = do_reset(client, code)   # навіть правильний код уже не працює
+    assert r.status_code == 400
+    assert "Too many attempts" in r.json()["detail"]
+
+
+def test_reset_expired_code(client, auth_headers, sent_emails):
+    request_reset(client)
+    conn = sqlite3.connect(os.environ["TASKMANAGER_DB"])
+    past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    conn.execute("UPDATE password_resets SET expires_at = ?", (past,))
+    conn.commit()
+    conn.close()
+    assert do_reset(client, reset_code(sent_emails)).status_code == 400
+
+
+def test_new_code_replaces_old(client, auth_headers, sent_emails):
+    request_reset(client)
+    old_code = reset_code(sent_emails)
+    # Обходимо 60-секундний cooldown, щоб отримати новий код
+    conn = sqlite3.connect(os.environ["TASKMANAGER_DB"])
+    conn.execute("UPDATE password_resets SET created_at = ?",
+                 ((datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat(),))
+    conn.commit()
+    conn.close()
+    request_reset(client)
+    new_code = reset_code(sent_emails)
+    if new_code != old_code:
+        assert do_reset(client, old_code).status_code == 400
+    assert do_reset(client, new_code).status_code == 204
+
+
+def test_resend_cooldown(client, auth_headers, sent_emails):
+    request_reset(client)
+    request_reset(client)
+    assert len(sent_emails) == 1
+
+
+def test_reset_unknown_email(client, sent_emails):
+    assert do_reset(client, "123456", email="nobody@test.com").status_code == 400
+
+
+@pytest.mark.parametrize("code,password", [("12345", "NewPass123"), ("abcdef", "NewPass123"), ("123456", "weak")])
+def test_reset_validation(client, auth_headers, code, password):
+    assert do_reset(client, code, password).status_code == 422

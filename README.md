@@ -5,7 +5,7 @@ A full-stack task manager built from scratch: a native **iOS app (SwiftUI)** and
 ## Features
 
 **iOS app**
-- Welcome screen, sign up and log in (token-based auth, session restored on launch)
+- Welcome screen, sign up, log in and password reset (token-based auth, session restored on launch)
 - **Plan** — tasks split into *To-do / In progress / Complete*, priorities, tags, due dates
 - Search, filters (priority, tag, due date: today / this week / overdue) and sorting
 - Tap a task to edit it; swipe to complete, move or delete
@@ -18,6 +18,7 @@ A full-stack task manager built from scratch: a native **iOS app (SwiftUI)** and
 
 **Backend**
 - Auth: register / login / logout with hashed passwords (PBKDF2 + salt)
+- Password reset via one-time 6-digit code: hashed, 15 min TTL, 5 attempts, 60 s resend cooldown
 - Tasks CRUD with filters (status, due date / range, search, tags, priority) and sorting
 - Profile and user settings endpoints
 - Stats endpoint: completed tasks per day (in the user's timezone), streak, goals; SQLite schema migrations
@@ -31,7 +32,7 @@ A full-stack task manager built from scratch: a native **iOS app (SwiftUI)** and
 | iOS | Swift, SwiftUI, Observation (`@Observable`), async/await, URLSession |
 | Architecture | MVVM |
 | Backend | Python, FastAPI, Pydantic, SQLite |
-| Tests | pytest (62 API tests), GitHub Actions CI |
+| Tests | pytest (74 API tests), GitHub Actions CI |
 
 ## Project structure
 
@@ -74,6 +75,8 @@ To run on a real iPhone, set your Mac's local IP in `Networking/APIClient.swift`
 | POST | `/auth/register` | create account → token |
 | POST | `/auth/login` | log in → token |
 | POST | `/auth/logout` | invalidate token |
+| POST | `/auth/forgot-password` | send a 6-digit reset code (same response for any email) |
+| POST | `/auth/reset-password` | set a new password with the code |
 | GET / PATCH / DELETE | `/me` | profile |
 | POST | `/me/password` | change password |
 | GET / PATCH | `/settings` | theme, timezone, week start, daily / weekly goal |

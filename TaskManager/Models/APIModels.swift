@@ -14,6 +14,16 @@ struct RegisterRequest: Encodable {
     let password: String
 }
 
+struct ForgotPasswordRequest: Encodable {
+    let email: String
+}
+
+struct ResetPasswordRequest: Encodable {
+    let email: String
+    let code: String
+    let newPassword: String
+}
+
 struct AuthResponse: Decodable {
     let token: String
     let user: User

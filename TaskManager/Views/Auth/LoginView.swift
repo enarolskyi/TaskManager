@@ -27,6 +27,21 @@ struct LoginView: View {
                 AppTextField(label: "Password", text: $password,
                              isSecure: true, accessibilityId: "login.password")
 
+                Button("Forgot password?") {
+                    router.showForgotPassword(email: email.trimmingCharacters(in: .whitespaces))
+                }
+                .font(.footnote)
+                .foregroundStyle(Color.appDark)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .accessibilityIdentifier("login.forgotPassword")
+
+                if let notice = router.loginNotice {
+                    Label(notice, systemImage: "checkmark.circle.fill")
+                        .font(.footnote)
+                        .foregroundStyle(.green)
+                        .accessibilityIdentifier("login.notice")
+                }
+
                 if let errorMessage {
                     Text(errorMessage)
                         .font(.footnote)
@@ -37,6 +52,7 @@ struct LoginView: View {
                 PrimaryButton(title: "Log in", isEnabled: canSubmit, isLoading: isLoading) {
                     Task {
                         isLoading = true
+                        router.loginNotice = nil
                         errorMessage = await auth.login(email: email, password: password)
                         isLoading = false
                     }

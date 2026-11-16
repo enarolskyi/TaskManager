@@ -70,6 +70,15 @@ def init_db():
             daily_goal  INTEGER NOT NULL DEFAULT 5,
             weekly_goal INTEGER NOT NULL DEFAULT 30
         );
+
+        -- Один активний код скидання пароля на юзера
+        CREATE TABLE IF NOT EXISTS password_resets (
+            user_id    INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+            code_hash  TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            attempts   INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        );
     """)
     migrate(conn)
     conn.commit()
@@ -194,6 +203,16 @@ class UserUpdate(BaseModel):
     full_name: Optional[FullName] = None
     phone: Optional[Phone] = None
     email: Optional[Email] = None
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    email: str
+    code: Annotated[str, Field(pattern=r"^\d{6}$")]
+    new_password: Password
 
 
 class ChangePasswordRequest(BaseModel):
@@ -354,6 +373,83 @@ def login(body: LoginRequest, db: sqlite3.Connection = Depends(get_db)):
 def logout(user=Depends(current_user), token: str = Depends(current_token),
            db: sqlite3.Connection = Depends(get_db)):
     db.execute("DELETE FROM tokens WHERE token = ?", (token,))
+    db.commit()
+
+
+# --- Password reset ---
+
+RESET_CODE_TTL = timedelta(minutes=15)
+RESET_MAX_ATTEMPTS = 5
+RESET_RESEND_COOLDOWN = timedelta(seconds=60)
+INVALID_CODE = "Invalid or expired code"
+
+
+def send_email(to: str, subject: str, body: str):
+    """Поки бекенд локальний — "лист" просто друкується в консоль uvicorn.
+    Після деплою тут буде справжня відправка (SMTP / поштовий сервіс)."""
+    print(f"\n📧 To: {to}\n   Subject: {subject}\n   {body}\n", flush=True)
+
+
+@app.post("/auth/forgot-password", tags=["auth"])
+def forgot_password(body: ForgotPasswordRequest, db: sqlite3.Connection = Depends(get_db)):
+    # Відповідь завжди однакова — щоб не можна було перевірити, чи зареєстрований email
+    response = {"detail": "If this email is registered, a reset code has been sent"}
+
+    user = db.execute("SELECT id, email FROM users WHERE email = ?",
+                      (body.email.strip().lower(),)).fetchone()
+    if user is None:
+        return response
+
+    now = datetime.now(timezone.utc)
+    existing = db.execute("SELECT created_at FROM password_resets WHERE user_id = ?",
+                          (user["id"],)).fetchone()
+    if existing and now - datetime.fromisoformat(existing["created_at"]) < RESET_RESEND_COOLDOWN:
+        return response   # не спамимо листами при частих натисканнях
+
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    # Новий код замінює попередній
+    db.execute(
+        "INSERT OR REPLACE INTO password_resets (user_id, code_hash, expires_at, attempts, created_at) "
+        "VALUES (?, ?, ?, 0, ?)",
+        (user["id"], hash_password(code), (now + RESET_CODE_TTL).isoformat(), now.isoformat()),
+    )
+    db.commit()
+
+    send_email(user["email"], "Your Task Manager reset code",
+               f"Reset code: {code} (valid for {int(RESET_CODE_TTL.total_seconds() // 60)} minutes)")
+    return response
+
+
+@app.post("/auth/reset-password", status_code=204, tags=["auth"])
+def reset_password(body: ResetPasswordRequest, db: sqlite3.Connection = Depends(get_db)):
+    user = db.execute("SELECT id FROM users WHERE email = ?", (body.email.strip().lower(),)).fetchone()
+    reset = None if user is None else db.execute(
+        "SELECT code_hash, expires_at, attempts FROM password_resets WHERE user_id = ?",
+        (user["id"],)).fetchone()
+    if reset is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, INVALID_CODE)
+
+    def drop_code():
+        db.execute("DELETE FROM password_resets WHERE user_id = ?", (user["id"],))
+        db.commit()
+
+    if datetime.now(timezone.utc) > datetime.fromisoformat(reset["expires_at"]):
+        drop_code()
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, INVALID_CODE)
+
+    if reset["attempts"] >= RESET_MAX_ATTEMPTS:
+        drop_code()
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Too many attempts. Request a new code")
+
+    if not verify_password(body.code, reset["code_hash"]):
+        db.execute("UPDATE password_resets SET attempts = attempts + 1 WHERE user_id = ?", (user["id"],))
+        db.commit()
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, INVALID_CODE)
+
+    db.execute("UPDATE users SET password_hash = ? WHERE id = ?",
+               (hash_password(body.new_password), user["id"]))
+    db.execute("DELETE FROM tokens WHERE user_id = ?", (user["id"],))   # розлогінюємо всі пристрої
+    db.execute("DELETE FROM password_resets WHERE user_id = ?", (user["id"],))   # код одноразовий
     db.commit()
 
 

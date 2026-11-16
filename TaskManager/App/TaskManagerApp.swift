@@ -53,6 +53,8 @@ struct RootView: View {
                         switch route {
                         case .login: LoginView()
                         case .register: RegisterView()
+                        case .forgotPassword(let email): ForgotPasswordView(initialEmail: email)
+                        case .resetPassword(let email): ResetPasswordView(email: email)
                         }
                     }
                 }
