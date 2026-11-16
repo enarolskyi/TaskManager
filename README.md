@@ -10,6 +10,8 @@ A full-stack task manager built from scratch: a native **iOS app (SwiftUI)** and
 - Search, filters (priority, tag, due date: today / this week / overdue) and sorting
 - Tap a task to edit it; swipe to complete, move or delete
 - **Calendar** — week strip with task indicators, tasks for the selected day, quick add for that date
+- **Productivity** — daily / weekly goals, 7-day chart (Swift Charts), streak, totals
+- **Reminders** — local notifications on due dates and a morning overview, configurable time
 - **More** — edit profile, change password, delete account, theme (System / Light / Dark), timezone, first day of week
 - Custom app icon (light / dark / tinted), dark mode, pull-to-refresh
 - `accessibilityIdentifier` on interactive elements — ready for XCUITest
@@ -18,6 +20,7 @@ A full-stack task manager built from scratch: a native **iOS app (SwiftUI)** and
 - Auth: register / login / logout with hashed passwords (PBKDF2 + salt)
 - Tasks CRUD with filters (status, due date / range, search, tags, priority) and sorting
 - Profile and user settings endpoints
+- Stats endpoint: completed tasks per day (in the user's timezone), streak, goals; SQLite schema migrations
 - Input validation with Pydantic, consistent error responses (401 / 404 / 409 / 422)
 - Swagger UI at `/docs`
 
@@ -28,7 +31,7 @@ A full-stack task manager built from scratch: a native **iOS app (SwiftUI)** and
 | iOS | Swift, SwiftUI, Observation (`@Observable`), async/await, URLSession |
 | Architecture | MVVM |
 | Backend | Python, FastAPI, Pydantic, SQLite |
-| Tests | pytest (45 API tests), GitHub Actions CI |
+| Tests | pytest (62 API tests), GitHub Actions CI |
 
 ## Project structure
 
@@ -73,7 +76,8 @@ To run on a real iPhone, set your Mac's local IP in `Networking/APIClient.swift`
 | POST | `/auth/logout` | invalidate token |
 | GET / PATCH / DELETE | `/me` | profile |
 | POST | `/me/password` | change password |
-| GET / PATCH | `/settings` | theme, timezone, week start |
+| GET / PATCH | `/settings` | theme, timezone, week start, daily / weekly goal |
+| GET | `/stats` | completed per day, streak, totals (`days`, default 7) |
 | GET | `/tasks` | list (`status_filter`, `due_date`, `due_from`, `due_to`, `search`, `tag`, `priority`, `sort`) |
 | POST | `/tasks` | create |
 | PATCH / DELETE | `/tasks/{id}` | update / delete |

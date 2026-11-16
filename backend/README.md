@@ -13,7 +13,7 @@ uvicorn main:app --reload --host 0.0.0.0
 
 Swagger: http://127.0.0.1:8000/docs
 
-База (`taskmanager.db`) створюється автоматично при першому запуску. Щоб скинути дані — зупинити сервер і видалити файл.
+База (`taskmanager.db`) створюється автоматично при першому запуску, нові колонки додаються міграцією при старті. Щоб скинути дані — зупинити сервер і видалити файл.
 
 ## Тести
 
@@ -44,8 +44,9 @@ Authorization: Bearer <token>
 | PATCH | `/me` | змінити ім'я / телефон / email | ✓ |
 | POST | `/me/password` | змінити пароль (`current_password`, `new_password`) | ✓ |
 | DELETE | `/me` | видалити акаунт разом із задачами | ✓ |
-| GET | `/settings` | налаштування: `theme`, `timezone`, `week_start` | ✓ |
+| GET | `/settings` | налаштування: `theme`, `timezone`, `week_start`, `daily_goal`, `weekly_goal` | ✓ |
 | PATCH | `/settings` | змінити налаштування | ✓ |
+| GET | `/stats` | статистика: виконані по днях, streak, підсумки (`?days=7`, 1–90) | ✓ |
 | GET | `/tasks` | список задач | ✓ |
 | POST | `/tasks` | створити задачу | ✓ |
 | PATCH | `/tasks/{id}` | оновити задачу (напр. `{"status": "done"}`) | ✓ |
@@ -64,7 +65,8 @@ Authorization: Bearer <token>
 - пріоритет: `low`, `medium`, `high`
 - тема: `system`, `light`, `dark`
 - початок тижня: `monday`, `sunday`
-- дати: `YYYY-MM-DD`
+- дати: `YYYY-MM-DD`; `completed_at` — ISO datetime в UTC, ставиться автоматично при переході в `done`
+- цілі: `daily_goal`, `weekly_goal` — від 1 до 100
 
 ## Приклад (curl)
 

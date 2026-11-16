@@ -33,6 +33,16 @@ final class SettingsStore {
         save(SettingsUpdateRequest(weekStart: weekStart))
     }
 
+    func setDailyGoal(_ goal: Int) {
+        settings.dailyGoal = goal
+        save(SettingsUpdateRequest(dailyGoal: goal))
+    }
+
+    func setWeeklyGoal(_ goal: Int) {
+        settings.weeklyGoal = goal
+        save(SettingsUpdateRequest(weeklyGoal: goal))
+    }
+
     func reset() {
         settings = .defaults
         errorMessage = nil

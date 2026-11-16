@@ -43,6 +43,7 @@ struct TaskItem: Identifiable, Codable, Equatable {
     var priority: TaskPriority
     var tag: String
     var dueDate: Date
+    var completedAt: Date?   // ставить сервер при переході в Complete
 
     /// Той самий ліміт, що й на бекенді
     static let maxTagLength = 20

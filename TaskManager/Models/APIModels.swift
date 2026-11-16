@@ -37,6 +37,8 @@ struct SettingsUpdateRequest: Encodable {
     var theme: AppTheme?
     var timezone: String?
     var weekStart: WeekStart?
+    var dailyGoal: Int?
+    var weeklyGoal: Int?
 }
 
 struct NewTaskRequest: Encodable {
@@ -60,4 +62,24 @@ struct TaskUpdateRequest: Encodable {
         title == nil && details == nil && status == nil
             && priority == nil && tag == nil && dueDate == nil
     }
+}
+
+// GET /stats
+struct Stats: Decodable, Equatable {
+    struct Day: Decodable, Equatable, Identifiable {
+        let date: Date
+        let completed: Int
+        var id: Date { date }
+    }
+
+    let days: [Day]
+    let completedToday: Int
+    let completedThisWeek: Int
+    let dailyGoal: Int
+    let weeklyGoal: Int
+    let streak: Int
+    let totalCompleted: Int
+    let todo: Int
+    let inProgress: Int
+    let overdue: Int
 }

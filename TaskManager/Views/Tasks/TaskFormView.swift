@@ -61,7 +61,7 @@ struct TaskFormView: View {
         return value.isEmpty ? "General" : value
     }
 
-    /// Тільки поля, що змінилися — їх і шлемо в PATCH
+    /// Тільки поля, що змінилися - їх і шлемо в PATCH
     private var changes: TaskUpdateRequest {
         guard let task = editingTask else { return TaskUpdateRequest() }
         var request = TaskUpdateRequest()

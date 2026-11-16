@@ -1,22 +1,14 @@
 import SwiftUI
 
-// Кольори з підтримкою light/dark
+// Кольори в Assets.xcassets (Brand*) з варіантами для light/dark.
+// Не через UIColor { traits in ... }: у Swift 6 такий closure ізольований на main actor
+// і падає, якщо колір резолвиться з іншого потоку (напр. у Swift Charts).
 extension Color {
-    static let appDark = Color(lightMode: UIColor(red: 0.07, green: 0.09, blue: 0.15, alpha: 1),
-                               darkMode: UIColor(red: 0.93, green: 0.94, blue: 0.96, alpha: 1))
-    static let appOnDark = Color(lightMode: .white,
-                                 darkMode: UIColor(red: 0.07, green: 0.09, blue: 0.15, alpha: 1))
-    static let appBackground = Color(lightMode: UIColor(red: 0.97, green: 0.97, blue: 0.98, alpha: 1),
-                                     darkMode: .black)
-    static let appCard = Color(lightMode: .white,
-                               darkMode: UIColor(red: 0.11, green: 0.11, blue: 0.13, alpha: 1))
+    static let appDark = Color("BrandInk")
+    static let appOnDark = Color("BrandOnInk")
+    static let appBackground = Color("BrandBackground")
+    static let appCard = Color("BrandCard")
     static let appBorder = Color.gray.opacity(0.35)
-
-    init(lightMode light: UIColor, darkMode dark: UIColor) {
-        self.init(uiColor: UIColor { traits in
-            traits.userInterfaceStyle == .dark ? dark : light
-        })
-    }
 }
 
 extension TaskPriority {

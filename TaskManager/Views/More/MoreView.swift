@@ -33,6 +33,11 @@ struct MoreView: View {
                     }
                     .accessibilityIdentifier("more.general")
 
+                    NavigationLink { GoalsView() } label: {
+                        Label("Goals", systemImage: "target")
+                    }
+                    .accessibilityIdentifier("more.goals")
+
                     NavigationLink { NotificationsView() } label: {
                         Label("Notifications", systemImage: "bell")
                     }
@@ -62,4 +67,6 @@ struct MoreView: View {
     MoreView()
         .environment(AuthViewModel())
         .environment(SettingsStore())
+        .environment(NotificationManager())
+        .environment(TaskStore())
 }

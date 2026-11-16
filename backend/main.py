@@ -8,7 +8,7 @@ import os
 import re
 import secrets
 import sqlite3
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from enum import Enum
 from typing import Annotated, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -58,18 +58,36 @@ def init_db():
             status   TEXT NOT NULL DEFAULT 'todo',
             priority TEXT NOT NULL DEFAULT 'medium',
             tag      TEXT NOT NULL DEFAULT 'General',
-            due_date TEXT NOT NULL
+            due_date TEXT NOT NULL,
+            completed_at TEXT
         );
 
         CREATE TABLE IF NOT EXISTS user_settings (
             user_id    INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
             theme      TEXT NOT NULL DEFAULT 'system',
             timezone   TEXT NOT NULL DEFAULT 'UTC',
-            week_start TEXT NOT NULL DEFAULT 'monday'
+            week_start TEXT NOT NULL DEFAULT 'monday',
+            daily_goal  INTEGER NOT NULL DEFAULT 5,
+            weekly_goal INTEGER NOT NULL DEFAULT 30
         );
     """)
+    migrate(conn)
     conn.commit()
     conn.close()
+
+
+def migrate(conn):
+    """Додає нові колонки в базу, створену старішою версією (CREATE TABLE IF NOT EXISTS їх не додасть)"""
+    def columns(table):
+        return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+
+    if "completed_at" not in columns("tasks"):
+        conn.execute("ALTER TABLE tasks ADD COLUMN completed_at TEXT")
+    settings_columns = columns("user_settings")
+    if "daily_goal" not in settings_columns:
+        conn.execute("ALTER TABLE user_settings ADD COLUMN daily_goal INTEGER NOT NULL DEFAULT 5")
+    if "weekly_goal" not in settings_columns:
+        conn.execute("ALTER TABLE user_settings ADD COLUMN weekly_goal INTEGER NOT NULL DEFAULT 30")
 
 
 init_db()
@@ -188,16 +206,23 @@ class AuthResponse(BaseModel):
     user: UserOut
 
 
+Goal = Annotated[int, Field(ge=1, le=100)]
+
+
 class SettingsOut(BaseModel):
     theme: Theme
     timezone: str
     week_start: WeekStart
+    daily_goal: int
+    weekly_goal: int
 
 
 class SettingsUpdate(BaseModel):
     theme: Optional[Theme] = None
     timezone: Optional[str] = None
     week_start: Optional[WeekStart] = None
+    daily_goal: Optional[Goal] = None
+    weekly_goal: Optional[Goal] = None
 
     @field_validator("timezone")
     @classmethod
@@ -251,6 +276,7 @@ class TaskOut(BaseModel):
     priority: TaskPriority
     tag: str
     due_date: date
+    completed_at: Optional[datetime] = None
 
 
 def clean_changes(model: BaseModel) -> dict:
@@ -379,10 +405,15 @@ def delete_me(user=Depends(current_user), db: sqlite3.Connection = Depends(get_d
 # --- Settings ---
 
 def get_settings_row(db, user_id: int):
-    db.execute("INSERT OR IGNORE INTO user_settings (user_id) VALUES (?)", (user_id,))
-    db.commit()
-    return db.execute("SELECT theme, timezone, week_start FROM user_settings WHERE user_id = ?",
-                      (user_id,)).fetchone()
+    query = ("SELECT theme, timezone, week_start, daily_goal, weekly_goal "
+             "FROM user_settings WHERE user_id = ?")
+    row = db.execute(query, (user_id,)).fetchone()
+    if row is None:
+        # Пишемо тільки якщо рядка ще немає — GET не повинен щоразу блокувати базу на запис
+        db.execute("INSERT OR IGNORE INTO user_settings (user_id) VALUES (?)", (user_id,))
+        db.commit()
+        row = db.execute(query, (user_id,)).fetchone()
+    return row
 
 
 @app.get("/settings", response_model=SettingsOut, tags=["settings"])
@@ -405,13 +436,21 @@ def update_settings(body: SettingsUpdate, user=Depends(current_user),
 
 # --- Tasks ---
 
+TASK_COLUMNS = "id, title, details, status, priority, tag, due_date, completed_at"
+
+
+def now_utc() -> str:
+    # Без мікросекунд — так дату простіше розпарсити на iOS
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
 def task_out(row) -> TaskOut:
     return TaskOut(**dict(row))
 
 
 def get_own_task(db, task_id: int, user_id: int):
     row = db.execute(
-        "SELECT id, title, details, status, priority, tag, due_date FROM tasks "
+        f"SELECT {TASK_COLUMNS} FROM tasks "
         "WHERE id = ? AND user_id = ?", (task_id, user_id)).fetchone()
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
@@ -432,7 +471,7 @@ def list_tasks(status_filter: Optional[TaskStatus] = None,
     Фільтри необов'язкові й комбінуються; due_from/due_to — включно.
     tag і priority можна передавати кілька разів: ?tag=Home&tag=Sport
     """
-    sql = "SELECT id, title, details, status, priority, tag, due_date FROM tasks WHERE user_id = ?"
+    sql = f"SELECT {TASK_COLUMNS} FROM tasks WHERE user_id = ?"
     params: list = [user["id"]]
     if status_filter:
         sql += " AND status = ?"
@@ -473,10 +512,11 @@ def list_tasks(status_filter: Optional[TaskStatus] = None,
 def create_task(body: TaskCreate, user=Depends(current_user),
                 db: sqlite3.Connection = Depends(get_db)):
     cur = db.execute(
-        "INSERT INTO tasks (user_id, title, details, status, priority, tag, due_date) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO tasks (user_id, title, details, status, priority, tag, due_date, completed_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (user["id"], body.title, body.details, body.status.value, body.priority.value,
-         body.tag or "General", body.due_date.isoformat()),
+         body.tag or "General", body.due_date.isoformat(),
+         now_utc() if body.status == TaskStatus.done else None),
     )
     db.commit()
     return task_out(get_own_task(db, cur.lastrowid, user["id"]))
@@ -485,11 +525,18 @@ def create_task(body: TaskCreate, user=Depends(current_user),
 @app.patch("/tasks/{task_id}", response_model=TaskOut, tags=["tasks"])
 def update_task(task_id: int, body: TaskUpdate, user=Depends(current_user),
                 db: sqlite3.Connection = Depends(get_db)):
-    get_own_task(db, task_id, user["id"])  # 404 для чужої/неіснуючої
+    task = get_own_task(db, task_id, user["id"])  # 404 для чужої/неіснуючої
 
     changes = clean_changes(body)
     if "title" in changes and not changes["title"].strip():
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Title is required")
+
+    # completed_at ставимо тільки при переході в done, щоб повторний PATCH не зсував дату
+    new_status = changes.get("status")
+    if new_status == TaskStatus.done.value and task["status"] != TaskStatus.done.value:
+        changes["completed_at"] = now_utc()
+    elif new_status and new_status != TaskStatus.done.value:
+        changes["completed_at"] = None
 
     if changes:
         sets = ", ".join(f"{k} = ?" for k in changes)
@@ -504,3 +551,80 @@ def delete_task(task_id: int, user=Depends(current_user),
     get_own_task(db, task_id, user["id"])
     db.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
     db.commit()
+
+
+# --- Stats (More → Productivity) ---
+
+class DayStat(BaseModel):
+    date: date
+    completed: int
+
+
+class StatsOut(BaseModel):
+    days: list[DayStat]          # по днях, від найстарішого до сьогодні
+    completed_today: int
+    completed_this_week: int
+    daily_goal: int
+    weekly_goal: int
+    streak: int                  # днів поспіль з виконаною денною ціллю
+    total_completed: int
+    todo: int
+    in_progress: int
+    overdue: int
+
+
+def week_start_date(today: date, week_start: str) -> date:
+    # weekday(): пн = 0 ... нд = 6
+    offset = today.weekday() if week_start == WeekStart.monday.value else (today.weekday() + 1) % 7
+    return today - timedelta(days=offset)
+
+
+@app.get("/stats", response_model=StatsOut, tags=["stats"])
+def get_stats(days: int = Query(default=7, ge=1, le=90),
+              user=Depends(current_user), db: sqlite3.Connection = Depends(get_db)):
+    settings = get_settings_row(db, user["id"])
+    tz = ZoneInfo(settings["timezone"])
+    today = datetime.now(tz).date()
+
+    # completed_at зберігається в UTC — переводимо в таймзону юзера, щоб день рахувався правильно
+    completed_per_day: dict[date, int] = {}
+    for row in db.execute("SELECT completed_at FROM tasks "
+                          "WHERE user_id = ? AND status = 'done' AND completed_at IS NOT NULL",
+                          (user["id"],)):
+        day = datetime.fromisoformat(row["completed_at"]).astimezone(tz).date()
+        completed_per_day[day] = completed_per_day.get(day, 0) + 1
+
+    day_stats = [
+        DayStat(date=day, completed=completed_per_day.get(day, 0))
+        for day in (today - timedelta(days=i) for i in reversed(range(days)))
+    ]
+
+    week_start = week_start_date(today, settings["week_start"])
+    completed_this_week = sum(count for day, count in completed_per_day.items() if week_start <= day <= today)
+
+    # Сьогодні ще можна встигнути, тому незакритий сьогоднішній день серію не обриває
+    daily_goal = settings["daily_goal"]
+    streak = 0
+    day = today if completed_per_day.get(today, 0) >= daily_goal else today - timedelta(days=1)
+    while completed_per_day.get(day, 0) >= daily_goal:
+        streak += 1
+        day -= timedelta(days=1)
+
+    counts = {row["status"]: row["n"] for row in db.execute(
+        "SELECT status, COUNT(*) AS n FROM tasks WHERE user_id = ? GROUP BY status", (user["id"],))}
+    overdue = db.execute(
+        "SELECT COUNT(*) FROM tasks WHERE user_id = ? AND status != 'done' AND due_date < ?",
+        (user["id"], today.isoformat())).fetchone()[0]
+
+    return StatsOut(
+        days=day_stats,
+        completed_today=completed_per_day.get(today, 0),
+        completed_this_week=completed_this_week,
+        daily_goal=daily_goal,
+        weekly_goal=settings["weekly_goal"],
+        streak=streak,
+        total_completed=counts.get("done", 0),
+        todo=counts.get("todo", 0),
+        in_progress=counts.get("in_progress", 0),
+        overdue=overdue,
+    )

@@ -182,13 +182,16 @@ def test_delete_account(client, auth_headers):
 def test_default_settings(client, auth_headers):
     r = client.get("/settings", headers=auth_headers)
     assert r.status_code == 200
-    assert r.json() == {"theme": "system", "timezone": "UTC", "week_start": "monday"}
+    assert r.json() == {"theme": "system", "timezone": "UTC", "week_start": "monday",
+                        "daily_goal": 5, "weekly_goal": 30}
 
 
 def test_update_settings(client, auth_headers):
     r = client.patch("/settings", json={"theme": "dark", "timezone": "Europe/Kyiv"}, headers=auth_headers)
     assert r.status_code == 200
-    assert r.json() == {"theme": "dark", "timezone": "Europe/Kyiv", "week_start": "monday"}
+    assert r.json()["theme"] == "dark"
+    assert r.json()["timezone"] == "Europe/Kyiv"
+    assert r.json()["week_start"] == "monday"
     assert client.get("/settings", headers=auth_headers).json()["theme"] == "dark"
 
 
@@ -298,3 +301,139 @@ def test_tag_too_long_on_update(client, auth_headers):
     task_id = client.post("/tasks", json=NEW_TASK, headers=auth_headers).json()["id"]
     r = client.patch(f"/tasks/{task_id}", json={"tag": "a" * 21}, headers=auth_headers)
     assert r.status_code == 422
+
+
+# ---------- Productivity: completed_at, goals, stats ----------
+
+import sqlite3
+from datetime import date, datetime, timedelta, timezone
+
+
+def complete(client, headers, task_id):
+    return client.patch(f"/tasks/{task_id}", json={"status": "done"}, headers=headers)
+
+
+def new_task(client, headers, **fields):
+    # Дата в майбутньому, щоб задача не рахувалась простроченою
+    future = (date.today() + timedelta(days=7)).isoformat()
+    return client.post("/tasks", json={**NEW_TASK, "due_date": future, **fields}, headers=headers).json()["id"]
+
+
+def set_completed_at(task_id, when: datetime):
+    # Підміняємо дату виконання напряму в БД, щоб перевірити минулі дні
+    conn = sqlite3.connect(os.environ["TASKMANAGER_DB"])
+    conn.execute("UPDATE tasks SET completed_at = ? WHERE id = ?", (when.isoformat(), task_id))
+    conn.commit()
+    conn.close()
+
+
+def test_completed_at_set_and_cleared(client, auth_headers):
+    task_id = new_task(client, auth_headers)
+    assert client.get("/tasks", headers=auth_headers).json()[0]["completed_at"] is None
+
+    done = complete(client, auth_headers, task_id).json()
+    assert done["completed_at"] is not None
+
+    back = client.patch(f"/tasks/{task_id}", json={"status": "todo"}, headers=auth_headers).json()
+    assert back["completed_at"] is None
+
+
+def test_completed_at_not_moved_by_repeated_patch(client, auth_headers):
+    task_id = new_task(client, auth_headers)
+    set_completed_at(task_id, datetime.now(timezone.utc) - timedelta(days=3))
+    client.patch(f"/tasks/{task_id}", json={"status": "done"}, headers=auth_headers)   # стає done
+    set_completed_at(task_id, datetime(2026, 1, 1, tzinfo=timezone.utc))
+    r = client.patch(f"/tasks/{task_id}", json={"status": "done", "title": "Renamed"}, headers=auth_headers)
+    assert r.json()["completed_at"].startswith("2026-01-01")
+
+
+def test_create_task_as_done_sets_completed_at(client, auth_headers):
+    r = client.post("/tasks", json={**NEW_TASK, "status": "done"}, headers=auth_headers)
+    assert r.json()["completed_at"] is not None
+
+
+def test_update_goals(client, auth_headers):
+    r = client.patch("/settings", json={"daily_goal": 3, "weekly_goal": 15}, headers=auth_headers)
+    assert r.status_code == 200
+    assert (r.json()["daily_goal"], r.json()["weekly_goal"]) == (3, 15)
+
+
+@pytest.mark.parametrize("body", [{"daily_goal": 0}, {"daily_goal": 101}, {"weekly_goal": -1}])
+def test_goals_validation(client, auth_headers, body):
+    assert client.patch("/settings", json=body, headers=auth_headers).status_code == 422
+
+
+def test_stats_requires_auth(client):
+    assert client.get("/stats").status_code == 401
+
+
+def test_stats_empty(client, auth_headers):
+    r = client.get("/stats", headers=auth_headers)
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body["days"]) == 7
+    assert body["days"][-1]["date"] == date.today().isoformat()
+    assert body["completed_today"] == 0
+    assert body["streak"] == 0
+
+
+def test_stats_counts(client, auth_headers):
+    t1 = new_task(client, auth_headers)
+    t2 = new_task(client, auth_headers)
+    new_task(client, auth_headers, status="in_progress")
+    new_task(client, auth_headers, due_date=(date.today() - timedelta(days=2)).isoformat())   # прострочена
+    complete(client, auth_headers, t1)
+    complete(client, auth_headers, t2)
+
+    body = client.get("/stats", headers=auth_headers).json()
+    assert body["completed_today"] == 2
+    assert body["days"][-1]["completed"] == 2
+    assert body["total_completed"] == 2
+    assert body["in_progress"] == 1
+    assert body["todo"] == 1
+    assert body["overdue"] == 1
+
+
+def test_stats_streak(client, auth_headers):
+    client.patch("/settings", json={"daily_goal": 1}, headers=auth_headers)
+    now = datetime.now(timezone.utc)
+    # Виконано вчора і позавчора, а 3 дні тому — пропуск
+    for days_ago in (1, 2, 4):
+        task_id = new_task(client, auth_headers)
+        complete(client, auth_headers, task_id)
+        set_completed_at(task_id, now - timedelta(days=days_ago))
+
+    assert client.get("/stats", headers=auth_headers).json()["streak"] == 2
+
+    # Сьогоднішня задача продовжує серію
+    complete(client, auth_headers, new_task(client, auth_headers))
+    assert client.get("/stats", headers=auth_headers).json()["streak"] == 3
+
+
+@pytest.mark.parametrize("days", [0, 91])
+def test_stats_days_validation(client, auth_headers, days):
+    assert client.get(f"/stats?days={days}", headers=auth_headers).status_code == 422
+
+
+def test_migration_adds_new_columns(tmp_path):
+    # База старого формату (без completed_at і цілей) має оновитися при старті
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
+    conn.executescript("""
+        CREATE TABLE tasks (id INTEGER PRIMARY KEY, user_id INTEGER, title TEXT, details TEXT,
+                            status TEXT, priority TEXT, tag TEXT, due_date TEXT);
+        CREATE TABLE user_settings (user_id INTEGER PRIMARY KEY, theme TEXT, timezone TEXT, week_start TEXT);
+    """)
+    conn.close()
+
+    os.environ["TASKMANAGER_DB"] = str(path)
+    import main
+    importlib.reload(main)
+
+    conn = sqlite3.connect(path)
+    task_cols = {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}
+    settings_cols = {r[1] for r in conn.execute("PRAGMA table_info(user_settings)")}
+    conn.close()
+    assert "completed_at" in task_cols
+    assert {"daily_goal", "weekly_goal"} <= settings_cols
+

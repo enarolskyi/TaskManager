@@ -46,7 +46,19 @@ final class APIClient {
     private let decoder: JSONDecoder = {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
-        decoder.dateDecodingStrategy = .formatted(APIClient.dateFormatter)
+        // Дати двох видів: "2026-11-15" (due_date) і "2026-11-15T09:30:00+00:00" (completed_at)
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let value = try container.decode(String.self)
+
+            let dayFormatter = DateFormatter()
+            dayFormatter.dateFormat = "yyyy-MM-dd"
+            dayFormatter.locale = Locale(identifier: "en_US_POSIX")
+            if let date = dayFormatter.date(from: value) { return date }
+            if let date = ISO8601DateFormatter().date(from: value) { return date }
+
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid date: \(value)")
+        }
         return decoder
     }()
 
