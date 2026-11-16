@@ -4,6 +4,8 @@ struct EmptyStateView: View {
     let icon: String
     let title: String
     var subtitle: String? = nil
+    var actionTitle: String? = nil
+    var action: (() -> Void)? = nil
 
     var body: some View {
         VStack(spacing: 10) {
@@ -21,14 +23,22 @@ struct EmptyStateView: View {
                     .foregroundStyle(.tertiary)
                     .multilineTextAlignment(.center)
             }
+
+            if let actionTitle, let action {
+                Button(actionTitle, action: action)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(Color.appDark)
+                    .padding(.top, 6)
+                    .accessibilityIdentifier("emptyState.action")
+            }
         }
-        // щоб вміст був по центру
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity)   // щоб вміст був по центру
         .padding(.horizontal, 40)
         .padding(.top, 100)
     }
 }
 
 #Preview {
-    EmptyStateView(icon: "tray", title: "No tasks here yet", subtitle: "Tap \"Add task\" to create one")
+    EmptyStateView(icon: "magnifyingglass", title: "No tasks match your filters",
+                   actionTitle: "Clear filters") {}
 }

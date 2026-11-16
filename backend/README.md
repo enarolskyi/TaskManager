@@ -55,6 +55,9 @@ Authorization: Bearer <token>
 - `status_filter` — `todo`, `in_progress`, `done`
 - `due_date` — конкретний день, напр. `2026-11-15`
 - `due_from` / `due_to` — діапазон дат включно
+- `search` — пошук у назві, описі й тезі (без урахування регістру)
+- `tag`, `priority` — можна кілька: `?tag=Home&tag=Sport&priority=high`
+- `sort` — `created` (за замовчуванням), `due_date`, `priority` (high першим), `name`
 
 Значення полів:
 - статус: `todo`, `in_progress`, `done`

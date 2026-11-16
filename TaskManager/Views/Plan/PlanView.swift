@@ -6,13 +6,20 @@ struct PlanView: View {
 
     @State private var selectedStatus: TaskStatus = .todo
     @State private var isShowingNewTask = false
+    @State private var isShowingFilter = false
+    // Живе, поки відкритий застосунок (TabView тримає PlanView в пам'яті)
+    @State private var filter = TaskFilter()
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
             VStack(alignment: .leading, spacing: 0) {
                 header
+                searchBar
+                if filter.activeCount > 0 {
+                    activeFilters
+                }
                 statusTabs
-                taskList
+                content
             }
 
             AddTaskButton { isShowingNewTask = true }
@@ -23,10 +30,17 @@ struct PlanView: View {
             await store.load()
         }
         .sheet(isPresented: $isShowingNewTask) {
-            NewTaskView()
+            TaskFormView(mode: .create(initialDate: .now))
                 .environment(store)
         }
+        .sheet(isPresented: $isShowingFilter) {
+            TaskFilterView(filter: $filter, availableTags: store.allTags)
+        }
         // Алерт помилок — у MainTabView
+    }
+
+    private func visibleTasks(for status: TaskStatus) -> [TaskItem] {
+        filter.apply(to: store.tasks(with: status))
     }
 
     // MARK: - Header
@@ -62,13 +76,71 @@ struct PlanView: View {
         .padding(.top, 12)
     }
 
+    // MARK: - Search & filters
+
+    private var searchBar: some View {
+        HStack(spacing: 10) {
+            SearchField(text: $filter.searchText)
+
+            Button {
+                isShowingFilter = true
+            } label: {
+                Image(systemName: "line.3.horizontal.decrease")
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(Color.appDark)
+                    .frame(width: 40, height: 40)
+                    .background(Color.appCard, in: RoundedRectangle(cornerRadius: 10))
+                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.appBorder))
+                    .overlay(alignment: .topTrailing) {
+                        if filter.activeCount > 0 {
+                            Text("\(filter.activeCount)")
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(.white)
+                                .frame(minWidth: 18, minHeight: 18)
+                                .background(Color.red, in: Circle())
+                                .offset(x: 6, y: -6)
+                        }
+                    }
+            }
+            .accessibilityIdentifier("plan.filter")
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 16)
+    }
+
+    private var activeFilters: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(TaskPriority.allCases.filter { filter.priorities.contains($0) }) { priority in
+                    FilterChip(title: priority.title) { filter.priorities.remove(priority) }
+                }
+                ForEach(filter.tags.sorted(), id: \.self) { tag in
+                    FilterChip(title: "#\(tag)") { filter.tags.remove(tag) }
+                }
+                if filter.due != .any {
+                    FilterChip(title: filter.due.title) { filter.due = .any }
+                }
+
+                Button("Reset") {
+                    withAnimation { filter.resetFilters() }
+                }
+                .font(.caption.weight(.medium))
+                .foregroundStyle(Color.appDark)
+                .accessibilityIdentifier("plan.resetFilters")
+            }
+            .padding(.horizontal, 24)
+        }
+        .padding(.top, 10)
+    }
+
     // MARK: - Status tabs
 
     private var statusTabs: some View {
         HStack {
             ForEach(TaskStatus.allCases) { status in
                 let isSelected = status == selectedStatus
-                let count = store.tasks(with: status).count
+                // Лічильник враховує пошук і фільтри
+                let count = visibleTasks(for: status).count
 
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) {
@@ -84,10 +156,41 @@ struct PlanView: View {
             }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 20)
+        .padding(.vertical, 16)
     }
 
-    // MARK: - Task list
+    // MARK: - Content
+
+    @ViewBuilder
+    private var content: some View {
+        let tasks = visibleTasks(for: selectedStatus)
+
+        if store.isLoading && store.tasks.isEmpty {
+            ProgressView()
+                .frame(maxWidth: .infinity)
+                .padding(.top, 100)
+            Spacer()
+        } else if tasks.isEmpty {
+            ScrollView {
+                if filter.isActive && !store.tasks(with: selectedStatus).isEmpty {
+                    EmptyStateView(icon: "magnifyingglass",
+                                   title: "No tasks match your filters",
+                                   actionTitle: "Clear filters") {
+                        withAnimation {
+                            filter.resetFilters()
+                            filter.searchText = ""
+                        }
+                    }
+                } else {
+                    EmptyStateView(icon: emptyIcon, title: emptyTitle, subtitle: emptySubtitle)
+                }
+            }
+            .refreshable { await store.load() }
+        } else {
+            TaskListView(tasks: tasks)
+                .refreshable { await store.load() }
+        }
+    }
 
     private var emptyIcon: String {
         switch selectedStatus {
@@ -107,32 +210,6 @@ struct PlanView: View {
 
     private var emptySubtitle: String? {
         selectedStatus == .todo ? "Tap \"Add task\" to create one" : nil
-    }
-
-    private var taskList: some View {
-        let tasks = store.tasks(with: selectedStatus)
-
-        return ScrollView {
-            if store.isLoading && store.tasks.isEmpty {
-                ProgressView()
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 100)
-            } else if tasks.isEmpty {
-                EmptyStateView(icon: emptyIcon, title: emptyTitle, subtitle: emptySubtitle)
-            } else {
-                LazyVStack(spacing: 12) {
-                    ForEach(tasks) { task in
-                        TaskCardView(task: task)
-                    }
-                }
-                .padding(.horizontal, 24)
-                .padding(.bottom, 90)   // місце під кнопку Add task
-            }
-        }
-        .refreshable {
-            await store.load()
-        }
-        .animation(.default, value: store.tasks)
     }
 }
 

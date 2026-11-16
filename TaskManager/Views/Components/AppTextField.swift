@@ -10,6 +10,7 @@ struct AppTextField: View {
     var accessibilityId: String = ""
 
     @State private var isRevealed = false
+    @FocusState private var isFocused: Bool
 
     var body: some View {
         HStack {
@@ -27,6 +28,7 @@ struct AppTextField: View {
                         TextField(label, text: $text)
                     }
                 }
+                .focused($isFocused)
                 .font(.subheadline)
                 .keyboardType(keyboard)
                 .textInputAutocapitalization(capitalization)
@@ -36,21 +38,36 @@ struct AppTextField: View {
 
             if isSecure {
                 Button {
-                    isRevealed.toggle()
+                    toggleReveal()
                 } label: {
                     Image(systemName: isRevealed ? "eye.slash" : "eye")
                         .foregroundStyle(.secondary)
+                        .frame(width: 32, height: 32)
+                        .contentShape(Rectangle())
                 }
                 .accessibilityIdentifier("\(accessibilityId).toggle")
             }
         }
         .padding(.horizontal, 12)
         .frame(height: 52)
+        // Тап будь-де в рамці фокусує поле, а не тільки по рядку тексту
+        .contentShape(Rectangle())
+        .onTapGesture { isFocused = true }
         .background(
             RoundedRectangle(cornerRadius: 10)
-                .stroke(Color.appBorder)
+                .stroke(isFocused ? Color.appDark : Color.appBorder, lineWidth: isFocused ? 1.5 : 1)
         )
         .animation(.easeInOut(duration: 0.15), value: text.isEmpty)
+        .animation(.easeInOut(duration: 0.15), value: isFocused)
+    }
+
+    // SecureField і TextField — різні view, тож при перемиканні фокус губиться. Повертаємо його.
+    private func toggleReveal() {
+        let wasFocused = isFocused
+        isRevealed.toggle()
+        if wasFocused {
+            DispatchQueue.main.async { isFocused = true }
+        }
     }
 }
 

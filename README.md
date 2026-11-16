@@ -7,6 +7,8 @@ A full-stack task manager built from scratch: a native **iOS app (SwiftUI)** and
 **iOS app**
 - Welcome screen, sign up and log in (token-based auth, session restored on launch)
 - **Plan** — tasks split into *To-do / In progress / Complete*, priorities, tags, due dates
+- Search, filters (priority, tag, due date: today / this week / overdue) and sorting
+- Tap a task to edit it; swipe to complete, move or delete
 - **Calendar** — week strip with task indicators, tasks for the selected day, quick add for that date
 - **More** — edit profile, change password, delete account, theme (System / Light / Dark), timezone, first day of week
 - Custom app icon (light / dark / tinted), dark mode, pull-to-refresh
@@ -14,7 +16,7 @@ A full-stack task manager built from scratch: a native **iOS app (SwiftUI)** and
 
 **Backend**
 - Auth: register / login / logout with hashed passwords (PBKDF2 + salt)
-- Tasks CRUD, filters by status and due date / date range
+- Tasks CRUD with filters (status, due date / range, search, tags, priority) and sorting
 - Profile and user settings endpoints
 - Input validation with Pydantic, consistent error responses (401 / 404 / 409 / 422)
 - Swagger UI at `/docs`
@@ -26,7 +28,7 @@ A full-stack task manager built from scratch: a native **iOS app (SwiftUI)** and
 | iOS | Swift, SwiftUI, Observation (`@Observable`), async/await, URLSession |
 | Architecture | MVVM |
 | Backend | Python, FastAPI, Pydantic, SQLite |
-| Tests | pytest (33 API tests), GitHub Actions CI |
+| Tests | pytest (45 API tests), GitHub Actions CI |
 
 ## Project structure
 
@@ -72,6 +74,6 @@ To run on a real iPhone, set your Mac's local IP in `Networking/APIClient.swift`
 | GET / PATCH / DELETE | `/me` | profile |
 | POST | `/me/password` | change password |
 | GET / PATCH | `/settings` | theme, timezone, week start |
-| GET | `/tasks` | list (`status_filter`, `due_date`, `due_from`, `due_to`) |
+| GET | `/tasks` | list (`status_filter`, `due_date`, `due_from`, `due_to`, `search`, `tag`, `priority`, `sort`) |
 | POST | `/tasks` | create |
 | PATCH / DELETE | `/tasks/{id}` | update / delete |

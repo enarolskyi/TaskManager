@@ -47,7 +47,17 @@ struct NewTaskRequest: Encodable {
     let dueDate: Date
 }
 
-// nil-поля не потрапляють у JSON
+// nil-поля не потрапляють у JSON, тож PATCH змінює лише передане
 struct TaskUpdateRequest: Encodable {
+    var title: String?
+    var details: String?
     var status: TaskStatus?
+    var priority: TaskPriority?
+    var tag: String?
+    var dueDate: Date?
+
+    var isEmpty: Bool {
+        title == nil && details == nil && status == nil
+            && priority == nil && tag == nil && dueDate == nil
+    }
 }

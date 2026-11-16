@@ -19,7 +19,7 @@ enum APIError: LocalizedError {
 final class APIClient {
     static let shared = APIClient()
 
-    // Симулятор — localhost Мака, реальний пристрій — IP Мака у Wi-Fi
+    // Симулятор — localhost мака, реальний пристрій — IP мака у Wi-Fi
     // IP може змінитися: ipconfig getifaddr en0
     private static let macIP = "192.168.0.226"
 

@@ -57,7 +57,7 @@ struct CalendarView: View {
             datePickerSheet
         }
         .sheet(isPresented: $isShowingNewTask) {
-            NewTaskView(initialDate: selectedDate)
+            TaskFormView(mode: .create(initialDate: selectedDate))
                 .environment(store)
         }
     }
@@ -96,8 +96,9 @@ struct CalendarView: View {
             Spacer()
 
             HStack(spacing: 20) {
-                Button { shiftWeek(by: -1) } label: { Image(systemName: "chevron.left") }
-                    .accessibilityIdentifier("calendar.prevWeek")
+                // Стрілки — крок на день, свайп по тижню — на тиждень
+                Button { shiftDay(by: -1) } label: { Image(systemName: "chevron.left") }
+                    .accessibilityIdentifier("calendar.prevDay")
 
                 Button("Today") {
                     withAnimation { selectedDate = .now }
@@ -105,8 +106,8 @@ struct CalendarView: View {
                 .font(.subheadline)
                 .accessibilityIdentifier("calendar.today")
 
-                Button { shiftWeek(by: 1) } label: { Image(systemName: "chevron.right") }
-                    .accessibilityIdentifier("calendar.nextWeek")
+                Button { shiftDay(by: 1) } label: { Image(systemName: "chevron.right") }
+                    .accessibilityIdentifier("calendar.nextDay")
             }
             .foregroundStyle(Color.appDark)
         }
@@ -167,32 +168,26 @@ struct CalendarView: View {
 
     // MARK: - Tasks
 
+    @ViewBuilder
     private var taskList: some View {
         let tasks = tasksForSelectedDay
 
-        return ScrollView {
-            if store.isLoading && store.tasks.isEmpty {
-                ProgressView()
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 100)
-            } else if tasks.isEmpty {
+        if store.isLoading && store.tasks.isEmpty {
+            ProgressView()
+                .frame(maxWidth: .infinity)
+                .padding(.top, 100)
+            Spacer()
+        } else if tasks.isEmpty {
+            ScrollView {
                 EmptyStateView(icon: "calendar.badge.checkmark",
                                title: "No tasks for this day",
                                subtitle: "Enjoy your free time or add a new task")
-            } else {
-                LazyVStack(spacing: 12) {
-                    ForEach(tasks) { task in
-                        TaskCardView(task: task)
-                    }
-                }
-                .padding(.horizontal, 24)
-                .padding(.bottom, 90)
             }
+            .refreshable { await store.load() }
+        } else {
+            TaskListView(tasks: tasks)
+                .refreshable { await store.load() }
         }
-        .refreshable {
-            await store.load()
-        }
-        .animation(.default, value: store.tasks)
     }
 
     // MARK: - Date picker
@@ -216,6 +211,12 @@ struct CalendarView: View {
             }
         }
         .presentationDetents([.medium, .large])
+    }
+
+    private func shiftDay(by days: Int) {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            selectedDate = calendar.date(byAdding: .day, value: days, to: selectedDate) ?? selectedDate
+        }
     }
 
     private func shiftWeek(by weeks: Int) {

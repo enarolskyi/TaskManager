@@ -113,7 +113,7 @@ struct AccountView: View {
         }
     }
 
-    // didLoad — щоб не затерти введене після повернення з Change password
+    // didLoad - щоб не затерти введене після повернення з Change password
     private func fillFromUser() {
         guard !didLoad, let user = auth.currentUser else { return }
         fullName = user.fullName

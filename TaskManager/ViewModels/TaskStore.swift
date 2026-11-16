@@ -17,47 +17,55 @@ final class TaskStore {
         tasks.filter { $0.status == status }
     }
 
+    /// Унікальні теги з усіх задач — для фільтра
+    var allTags: [String] {
+        Set(tasks.map(\.tag)).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
     func load() async {
         isLoading = true
         defer { isLoading = false }
-        await run {
+        report(await perform {
             tasks = try await api.get("/tasks")
+        })
+    }
+
+    // add / update / delete повертають текст помилки або nil.
+    // Форма показує помилку в себе, а дії зі списку йдуть у спільний алерт через report().
+
+    func add(_ request: NewTaskRequest) async -> String? {
+        await perform {
+            let task: TaskItem = try await api.post("/tasks", body: request)
+            tasks.append(task)
         }
     }
 
-    // Повертає текст помилки або nil. Помилку показує NewTaskView, тому errorMessage не чіпаємо
-    func add(_ request: NewTaskRequest) async -> String? {
-        do {
-            let task: TaskItem = try await api.post("/tasks", body: request)
-            tasks.append(task)
-            return nil
-        } catch APIError.unauthorized {
-            onUnauthorized?()
-            return nil
-        } catch {
-            return error.localizedDescription
+    func update(_ task: TaskItem, with request: TaskUpdateRequest) async -> String? {
+        guard !request.isEmpty else { return nil }
+        return await perform {
+            let updated: TaskItem = try await api.patch("/tasks/\(task.id)", body: request)
+            replace(updated)
+        }
+    }
+
+    func delete(_ task: TaskItem) async -> String? {
+        await perform {
+            try await api.delete("/tasks/\(task.id)")
+            tasks.removeAll { $0.id == task.id }
         }
     }
 
     func move(_ task: TaskItem, to status: TaskStatus) async {
-        await run {
-            let updated: TaskItem = try await api.patch(
-                "/tasks/\(task.id)",
-                body: TaskUpdateRequest(status: status)
-            )
-            replace(updated)
-        }
+        report(await update(task, with: TaskUpdateRequest(status: status)))
     }
 
     func toggleComplete(_ task: TaskItem) async {
         await move(task, to: task.status == .done ? .todo : .done)
     }
 
-    func delete(_ task: TaskItem) async {
-        await run {
-            try await api.delete("/tasks/\(task.id)")
-            tasks.removeAll { $0.id == task.id }
-        }
+    /// Показати помилку в алерті MainTabView
+    func report(_ error: String?) {
+        if let error { errorMessage = error }
     }
 
     func reset() {
@@ -73,13 +81,16 @@ final class TaskStore {
         }
     }
 
-    private func run(_ operation: () async throws -> Void) async {
+    /// 401 → logout (без тексту помилки), інше → текст помилки
+    private func perform(_ operation: () async throws -> Void) async -> String? {
         do {
             try await operation()
+            return nil
         } catch APIError.unauthorized {
             onUnauthorized?()
+            return nil
         } catch {
-            errorMessage = error.localizedDescription
+            return error.localizedDescription
         }
     }
 }

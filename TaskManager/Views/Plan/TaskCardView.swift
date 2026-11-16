@@ -15,7 +15,7 @@ struct TaskCardView: View {
                     .font(.title3)
                     .foregroundStyle(isDone ? Color.appDark : .secondary)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.borderless)   // в List інакше тап по рядку натискає всі кнопки
             .accessibilityIdentifier("task.checkbox")
 
             VStack(alignment: .leading, spacing: 6) {
@@ -37,9 +37,25 @@ struct TaskCardView: View {
                         .padding(.horizontal, 8)
                         .padding(.vertical, 2)
                         .background(task.priority.color.opacity(0.2), in: Capsule())
+                        .fixedSize()
 
-                    Label(task.tag, systemImage: "tag")
-                    Label(dueDateText, systemImage: "clock")
+                    // Тег стискається першим і обрізається "…", дата завжди повністю.
+                    // Без Label: з fixedSize він інколи ховає текст і лишає тільки іконку
+                    HStack(spacing: 4) {
+                        Image(systemName: "tag")
+                        Text(task.tag)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+
+                    HStack(spacing: 4) {
+                        Image(systemName: "clock")
+                        Text(dueDateText)
+                            .lineLimit(1)
+                    }
+                    .foregroundStyle(isOverdue ? Color.red : Color.secondary)
+                    .fixedSize()
+                    .layoutPriority(1)
                 }
                 .font(.caption2)
                 .foregroundStyle(.secondary)
@@ -55,7 +71,7 @@ struct TaskCardView: View {
                 }
                 Divider()
                 Button("Delete task", role: .destructive) {
-                    Task { await store.delete(task) }
+                    Task { store.report(await store.delete(task)) }
                 }
             } label: {
                 Image(systemName: "ellipsis")
@@ -67,6 +83,10 @@ struct TaskCardView: View {
         .padding(14)
         .background(Color.appCard, in: RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.05), radius: 6, y: 2)
+    }
+
+    private var isOverdue: Bool {
+        !isDone && task.dueDate < Calendar.current.startOfDay(for: .now)
     }
 
     private var dueDateText: String {

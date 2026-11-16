@@ -13,9 +13,9 @@ from enum import Enum
 from typing import Annotated, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import AfterValidator, BaseModel, field_validator
+from pydantic import AfterValidator, BaseModel, Field, field_validator
 
 DB_PATH = os.environ.get("TASKMANAGER_DB", "taskmanager.db")
 
@@ -124,6 +124,9 @@ Phone = Annotated[str, AfterValidator(validate_phone)]
 Email = Annotated[str, AfterValidator(validate_email)]
 Password = Annotated[str, AfterValidator(validate_password)]
 
+MAX_TAG_LENGTH = 20   # той самий ліміт, що в iOS (TaskItem.maxTagLength)
+Tag = Annotated[str, Field(max_length=MAX_TAG_LENGTH)]
+
 
 # --- Schemas ---
 
@@ -213,7 +216,7 @@ class TaskCreate(BaseModel):
     details: str = ""
     status: TaskStatus = TaskStatus.todo
     priority: TaskPriority = TaskPriority.medium
-    tag: str = "General"
+    tag: Tag = "General"
     due_date: date
 
     @field_validator("title")
@@ -229,8 +232,15 @@ class TaskUpdate(BaseModel):
     details: Optional[str] = None
     status: Optional[TaskStatus] = None
     priority: Optional[TaskPriority] = None
-    tag: Optional[str] = None
+    tag: Optional[Tag] = None
     due_date: Optional[date] = None
+
+
+class TaskSort(str, Enum):
+    created = "created"
+    due_date = "due_date"
+    priority = "priority"
+    name = "name"
 
 
 class TaskOut(BaseModel):
@@ -413,8 +423,15 @@ def list_tasks(status_filter: Optional[TaskStatus] = None,
                due_date: Optional[date] = None,
                due_from: Optional[date] = None,
                due_to: Optional[date] = None,
+               search: Optional[str] = None,
+               tag: Optional[list[str]] = Query(default=None),
+               priority: Optional[list[TaskPriority]] = Query(default=None),
+               sort: TaskSort = TaskSort.created,
                user=Depends(current_user), db: sqlite3.Connection = Depends(get_db)):
-    """Фільтри необов'язкові й комбінуються; due_from/due_to — включно."""
+    """
+    Фільтри необов'язкові й комбінуються; due_from/due_to — включно.
+    tag і priority можна передавати кілька разів: ?tag=Home&tag=Sport
+    """
     sql = "SELECT id, title, details, status, priority, tag, due_date FROM tasks WHERE user_id = ?"
     params: list = [user["id"]]
     if status_filter:
@@ -430,7 +447,25 @@ def list_tasks(status_filter: Optional[TaskStatus] = None,
     if due_to:
         sql += " AND due_date <= ?"
         params.append(due_to.isoformat())
-    sql += " ORDER BY due_date, id"
+    if search and search.strip():
+        # LIKE у SQLite нечутливий до регістру для латиниці
+        sql += " AND (title LIKE ? OR details LIKE ? OR tag LIKE ?)"
+        pattern = f"%{search.strip()}%"
+        params += [pattern, pattern, pattern]
+    if tag:
+        sql += f" AND tag IN ({', '.join('?' * len(tag))})"
+        params += tag
+    if priority:
+        sql += f" AND priority IN ({', '.join('?' * len(priority))})"
+        params += [p.value for p in priority]
+
+    order_by = {
+        TaskSort.created: "id",
+        TaskSort.due_date: "due_date, id",
+        TaskSort.priority: "CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, id",
+        TaskSort.name: "title COLLATE NOCASE, id",
+    }
+    sql += f" ORDER BY {order_by[sort]}"
     return [task_out(r) for r in db.execute(sql, params).fetchall()]
 
 

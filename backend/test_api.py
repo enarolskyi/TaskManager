@@ -214,3 +214,87 @@ def test_patch_task_with_null_is_ignored(client, auth_headers):
     assert r.status_code == 200
     assert r.json()["status"] == "todo"
     assert r.json()["title"] == "New"
+
+
+# ---------- Search / filters / sort ----------
+
+@pytest.fixture
+def sample_tasks(client, auth_headers):
+    tasks = [
+        {"title": "Water the flowers", "priority": "low", "tag": "Home", "due_date": "2026-11-20"},
+        {"title": "Book a table", "details": "Valentine's day", "priority": "high", "tag": "Relationship", "due_date": "2026-11-15"},
+        {"title": "Create workout plan", "priority": "medium", "tag": "Sport", "due_date": "2026-11-18"},
+        {"title": "buy protein", "priority": "high", "tag": "Sport", "due_date": "2026-11-16"},
+    ]
+    for t in tasks:
+        client.post("/tasks", json=t, headers=auth_headers)
+    return tasks
+
+
+def titles(response):
+    return [t["title"] for t in response.json()]
+
+
+def test_search_by_title_case_insensitive(client, auth_headers, sample_tasks):
+    r = client.get("/tasks?search=WATER", headers=auth_headers)
+    assert titles(r) == ["Water the flowers"]
+
+
+def test_search_matches_details_and_tag(client, auth_headers, sample_tasks):
+    assert titles(client.get("/tasks?search=valentine", headers=auth_headers)) == ["Book a table"]
+    assert len(client.get("/tasks?search=sport", headers=auth_headers).json()) == 2
+
+
+def test_filter_by_multiple_tags(client, auth_headers, sample_tasks):
+    r = client.get("/tasks?tag=Home&tag=Relationship", headers=auth_headers)
+    assert sorted(titles(r)) == ["Book a table", "Water the flowers"]
+
+
+def test_filter_by_priority(client, auth_headers, sample_tasks):
+    r = client.get("/tasks?priority=high", headers=auth_headers)
+    assert {t["priority"] for t in r.json()} == {"high"}
+    assert len(r.json()) == 2
+
+
+def test_combined_filters(client, auth_headers, sample_tasks):
+    r = client.get("/tasks?tag=Sport&priority=high", headers=auth_headers)
+    assert titles(r) == ["buy protein"]
+
+
+@pytest.mark.parametrize("sort,expected", [
+    ("created", ["Water the flowers", "Book a table", "Create workout plan", "buy protein"]),
+    ("due_date", ["Book a table", "buy protein", "Create workout plan", "Water the flowers"]),
+    ("priority", ["Book a table", "buy protein", "Create workout plan", "Water the flowers"]),
+    ("name", ["Book a table", "buy protein", "Create workout plan", "Water the flowers"]),
+])
+def test_sort(client, auth_headers, sample_tasks, sort, expected):
+    assert titles(client.get(f"/tasks?sort={sort}", headers=auth_headers)) == expected
+
+
+@pytest.mark.parametrize("query", ["sort=random", "priority=urgent"])
+def test_invalid_filter_values(client, auth_headers, query):
+    assert client.get(f"/tasks?{query}", headers=auth_headers).status_code == 422
+
+
+def test_filters_respect_other_users(client, auth_headers, sample_tasks):
+    other = client.post("/auth/register", json={**VALID_USER, "email": "other@test.com"}).json()
+    r = client.get("/tasks?search=water", headers={"Authorization": f"Bearer {other['token']}"})
+    assert r.json() == []
+
+
+# ---------- Tag length ----------
+
+def test_tag_max_length_allowed(client, auth_headers):
+    r = client.post("/tasks", json={**NEW_TASK, "tag": "a" * 20}, headers=auth_headers)
+    assert r.status_code == 201
+
+
+def test_tag_too_long_on_create(client, auth_headers):
+    r = client.post("/tasks", json={**NEW_TASK, "tag": "a" * 21}, headers=auth_headers)
+    assert r.status_code == 422
+
+
+def test_tag_too_long_on_update(client, auth_headers):
+    task_id = client.post("/tasks", json=NEW_TASK, headers=auth_headers).json()["id"]
+    r = client.patch(f"/tasks/{task_id}", json={"tag": "a" * 21}, headers=auth_headers)
+    assert r.status_code == 422

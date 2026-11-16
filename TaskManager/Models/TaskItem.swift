@@ -43,4 +43,7 @@ struct TaskItem: Identifiable, Codable, Equatable {
     var priority: TaskPriority
     var tag: String
     var dueDate: Date
+
+    /// Той самий ліміт, що й на бекенді
+    static let maxTagLength = 20
 }
