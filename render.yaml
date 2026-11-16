@@ -1,0 +1,15 @@
+# Render Blueprint: описує веб-сервіс бекенду.
+# Render читає цей файл при "New → Blueprint" і створює сервіс автоматично.
+services:
+  - type: web
+    name: taskmanager-api
+    runtime: python
+    plan: free
+    rootDir: backend              # код бекенду лежить у підпапці backend/
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      - key: DATABASE_URL          # connection string з Neon — вставляється в дашборді Render
+        sync: false

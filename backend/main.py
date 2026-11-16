@@ -1,103 +1,33 @@
 """
-TaskManager API (FastAPI + SQLite)
+TaskManager API (FastAPI + SQLAlchemy)
 
+Працює на SQLite (локально) і PostgreSQL (хмара) — залежно від DATABASE_URL.
 uvicorn main:app --reload
 """
 import hashlib
-import os
 import re
 import secrets
-import sqlite3
 from datetime import date, datetime, timedelta, timezone
 from enum import Enum
 from typing import Annotated, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import AfterValidator, BaseModel, Field, field_validator
 
-DB_PATH = os.environ.get("TASKMANAGER_DB", "taskmanager.db")
+from database import Database, get_db, init_db
 
-app = FastAPI(title="TaskManager API", version="1.1")
+app = FastAPI(title="TaskManager API", version="2.0")
 
-
-# --- DB ---
-
-def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    try:
-        yield conn
-    finally:
-        conn.close()
-
-
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS users (
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            full_name     TEXT NOT NULL,
-            phone         TEXT NOT NULL,
-            email         TEXT NOT NULL UNIQUE,
-            password_hash TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS tokens (
-            token   TEXT PRIMARY KEY,
-            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE
-        );
-
-        CREATE TABLE IF NOT EXISTS tasks (
-            id       INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            title    TEXT NOT NULL,
-            details  TEXT NOT NULL DEFAULT '',
-            status   TEXT NOT NULL DEFAULT 'todo',
-            priority TEXT NOT NULL DEFAULT 'medium',
-            tag      TEXT NOT NULL DEFAULT 'General',
-            due_date TEXT NOT NULL,
-            completed_at TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS user_settings (
-            user_id    INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-            theme      TEXT NOT NULL DEFAULT 'system',
-            timezone   TEXT NOT NULL DEFAULT 'UTC',
-            week_start TEXT NOT NULL DEFAULT 'monday',
-            daily_goal  INTEGER NOT NULL DEFAULT 5,
-            weekly_goal INTEGER NOT NULL DEFAULT 30
-        );
-
-        -- Один активний код скидання пароля на юзера
-        CREATE TABLE IF NOT EXISTS password_resets (
-            user_id    INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-            code_hash  TEXT NOT NULL,
-            expires_at TEXT NOT NULL,
-            attempts   INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL
-        );
-    """)
-    migrate(conn)
-    conn.commit()
-    conn.close()
-
-
-def migrate(conn):
-    """Додає нові колонки в базу, створену старішою версією (CREATE TABLE IF NOT EXISTS їх не додасть)"""
-    def columns(table):
-        return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
-
-    if "completed_at" not in columns("tasks"):
-        conn.execute("ALTER TABLE tasks ADD COLUMN completed_at TEXT")
-    settings_columns = columns("user_settings")
-    if "daily_goal" not in settings_columns:
-        conn.execute("ALTER TABLE user_settings ADD COLUMN daily_goal INTEGER NOT NULL DEFAULT 5")
-    if "weekly_goal" not in settings_columns:
-        conn.execute("ALTER TABLE user_settings ADD COLUMN weekly_goal INTEGER NOT NULL DEFAULT 30")
-
+# Дозволяємо запити з браузера (напр. Swagger на іншому домені). Нативному застосунку CORS не потрібен.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 init_db()
 
@@ -299,7 +229,7 @@ class TaskOut(BaseModel):
 
 
 def clean_changes(model: BaseModel) -> dict:
-    """Тільки передані й не-null поля; enum/date → рядки для SQLite"""
+    """Тільки передані й не-null поля; enum/date → рядки"""
     changes = model.model_dump(exclude_unset=True, exclude_none=True)
     for key, value in changes.items():
         if isinstance(value, Enum):
@@ -321,7 +251,7 @@ def current_token(creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer
 
 
 def current_user(token: str = Depends(current_token),
-                 db: sqlite3.Connection = Depends(get_db)) -> sqlite3.Row:
+                 db: Database = Depends(get_db)):
     user = db.execute(
         "SELECT users.* FROM tokens JOIN users ON users.id = tokens.user_id WHERE token = ?",
         (token,),
@@ -345,22 +275,23 @@ def issue_token(db, user_id: int) -> str:
 # --- Auth ---
 
 @app.post("/auth/register", response_model=AuthResponse, status_code=201, tags=["auth"])
-def register(body: RegisterRequest, db: sqlite3.Connection = Depends(get_db)):
+def register(body: RegisterRequest, db: Database = Depends(get_db)):
     exists = db.execute("SELECT 1 FROM users WHERE email = ?", (body.email,)).fetchone()
     if exists:
         raise HTTPException(status.HTTP_409_CONFLICT, "User with this email already exists")
 
     cur = db.execute(
-        "INSERT INTO users (full_name, phone, email, password_hash) VALUES (?, ?, ?, ?)",
+        "INSERT INTO users (full_name, phone, email, password_hash) VALUES (?, ?, ?, ?) RETURNING id",
         (body.full_name, body.phone, body.email, hash_password(body.password)),
     )
+    user_id = cur.lastrowid
     db.commit()
-    user = db.execute("SELECT * FROM users WHERE id = ?", (cur.lastrowid,)).fetchone()
+    user = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     return AuthResponse(token=issue_token(db, user["id"]), user=user_out(user))
 
 
 @app.post("/auth/login", response_model=AuthResponse, tags=["auth"])
-def login(body: LoginRequest, db: sqlite3.Connection = Depends(get_db)):
+def login(body: LoginRequest, db: Database = Depends(get_db)):
     user = db.execute("SELECT * FROM users WHERE email = ?",
                       (body.email.strip().lower(),)).fetchone()
     # Одна помилка для обох випадків, щоб не розкривати, які email зареєстровані
@@ -371,7 +302,7 @@ def login(body: LoginRequest, db: sqlite3.Connection = Depends(get_db)):
 
 @app.post("/auth/logout", status_code=204, tags=["auth"])
 def logout(user=Depends(current_user), token: str = Depends(current_token),
-           db: sqlite3.Connection = Depends(get_db)):
+           db: Database = Depends(get_db)):
     db.execute("DELETE FROM tokens WHERE token = ?", (token,))
     db.commit()
 
@@ -391,7 +322,7 @@ def send_email(to: str, subject: str, body: str):
 
 
 @app.post("/auth/forgot-password", tags=["auth"])
-def forgot_password(body: ForgotPasswordRequest, db: sqlite3.Connection = Depends(get_db)):
+def forgot_password(body: ForgotPasswordRequest, db: Database = Depends(get_db)):
     # Відповідь завжди однакова — щоб не можна було перевірити, чи зареєстрований email
     response = {"detail": "If this email is registered, a reset code has been sent"}
 
@@ -407,9 +338,10 @@ def forgot_password(body: ForgotPasswordRequest, db: sqlite3.Connection = Depend
         return response   # не спамимо листами при частих натисканнях
 
     code = f"{secrets.randbelow(1_000_000):06d}"
-    # Новий код замінює попередній
+    # Новий код замінює попередній (DELETE+INSERT — портативно між базами)
+    db.execute("DELETE FROM password_resets WHERE user_id = ?", (user["id"],))
     db.execute(
-        "INSERT OR REPLACE INTO password_resets (user_id, code_hash, expires_at, attempts, created_at) "
+        "INSERT INTO password_resets (user_id, code_hash, expires_at, attempts, created_at) "
         "VALUES (?, ?, ?, 0, ?)",
         (user["id"], hash_password(code), (now + RESET_CODE_TTL).isoformat(), now.isoformat()),
     )
@@ -421,7 +353,7 @@ def forgot_password(body: ForgotPasswordRequest, db: sqlite3.Connection = Depend
 
 
 @app.post("/auth/reset-password", status_code=204, tags=["auth"])
-def reset_password(body: ResetPasswordRequest, db: sqlite3.Connection = Depends(get_db)):
+def reset_password(body: ResetPasswordRequest, db: Database = Depends(get_db)):
     user = db.execute("SELECT id FROM users WHERE email = ?", (body.email.strip().lower(),)).fetchone()
     reset = None if user is None else db.execute(
         "SELECT code_hash, expires_at, attempts FROM password_resets WHERE user_id = ?",
@@ -462,7 +394,7 @@ def me(user=Depends(current_user)):
 
 @app.patch("/me", response_model=UserOut, tags=["profile"])
 def update_me(body: UserUpdate, user=Depends(current_user),
-              db: sqlite3.Connection = Depends(get_db)):
+              db: Database = Depends(get_db)):
     changes = clean_changes(body)
 
     if "email" in changes:
@@ -480,7 +412,7 @@ def update_me(body: UserUpdate, user=Depends(current_user),
 
 @app.post("/me/password", status_code=204, tags=["profile"])
 def change_password(body: ChangePasswordRequest, user=Depends(current_user),
-                    token: str = Depends(current_token), db: sqlite3.Connection = Depends(get_db)):
+                    token: str = Depends(current_token), db: Database = Depends(get_db)):
     if not verify_password(body.current_password, user["password_hash"]):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Current password is incorrect")
 
@@ -492,7 +424,7 @@ def change_password(body: ChangePasswordRequest, user=Depends(current_user),
 
 
 @app.delete("/me", status_code=204, tags=["profile"])
-def delete_me(user=Depends(current_user), db: sqlite3.Connection = Depends(get_db)):
+def delete_me(user=Depends(current_user), db: Database = Depends(get_db)):
     # токени, задачі й налаштування видаляються через ON DELETE CASCADE
     db.execute("DELETE FROM users WHERE id = ?", (user["id"],))
     db.commit()
@@ -506,20 +438,23 @@ def get_settings_row(db, user_id: int):
     row = db.execute(query, (user_id,)).fetchone()
     if row is None:
         # Пишемо тільки якщо рядка ще немає — GET не повинен щоразу блокувати базу на запис
-        db.execute("INSERT OR IGNORE INTO user_settings (user_id) VALUES (?)", (user_id,))
+        db.execute(
+            "INSERT INTO user_settings (user_id) SELECT ? "
+            "WHERE NOT EXISTS (SELECT 1 FROM user_settings WHERE user_id = ?)",
+            (user_id, user_id))
         db.commit()
         row = db.execute(query, (user_id,)).fetchone()
     return row
 
 
 @app.get("/settings", response_model=SettingsOut, tags=["settings"])
-def get_settings(user=Depends(current_user), db: sqlite3.Connection = Depends(get_db)):
+def get_settings(user=Depends(current_user), db: Database = Depends(get_db)):
     return SettingsOut(**dict(get_settings_row(db, user["id"])))
 
 
 @app.patch("/settings", response_model=SettingsOut, tags=["settings"])
 def update_settings(body: SettingsUpdate, user=Depends(current_user),
-                    db: sqlite3.Connection = Depends(get_db)):
+                    db: Database = Depends(get_db)):
     get_settings_row(db, user["id"])
     changes = clean_changes(body)
     if changes:
@@ -562,7 +497,7 @@ def list_tasks(status_filter: Optional[TaskStatus] = None,
                tag: Optional[list[str]] = Query(default=None),
                priority: Optional[list[TaskPriority]] = Query(default=None),
                sort: TaskSort = TaskSort.created,
-               user=Depends(current_user), db: sqlite3.Connection = Depends(get_db)):
+               user=Depends(current_user), db: Database = Depends(get_db)):
     """
     Фільтри необов'язкові й комбінуються; due_from/due_to — включно.
     tag і priority можна передавати кілька разів: ?tag=Home&tag=Sport
@@ -583,9 +518,9 @@ def list_tasks(status_filter: Optional[TaskStatus] = None,
         sql += " AND due_date <= ?"
         params.append(due_to.isoformat())
     if search and search.strip():
-        # LIKE у SQLite нечутливий до регістру для латиниці
-        sql += " AND (title LIKE ? OR details LIKE ? OR tag LIKE ?)"
-        pattern = f"%{search.strip()}%"
+        # LOWER(...) LIKE — нечутливо до регістру й однаково на SQLite та Postgres
+        sql += " AND (LOWER(title) LIKE ? OR LOWER(details) LIKE ? OR LOWER(tag) LIKE ?)"
+        pattern = f"%{search.strip().lower()}%"
         params += [pattern, pattern, pattern]
     if tag:
         sql += f" AND tag IN ({', '.join('?' * len(tag))})"
@@ -598,7 +533,7 @@ def list_tasks(status_filter: Optional[TaskStatus] = None,
         TaskSort.created: "id",
         TaskSort.due_date: "due_date, id",
         TaskSort.priority: "CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, id",
-        TaskSort.name: "title COLLATE NOCASE, id",
+        TaskSort.name: "LOWER(title), id",
     }
     sql += f" ORDER BY {order_by[sort]}"
     return [task_out(r) for r in db.execute(sql, params).fetchall()]
@@ -606,21 +541,22 @@ def list_tasks(status_filter: Optional[TaskStatus] = None,
 
 @app.post("/tasks", response_model=TaskOut, status_code=201, tags=["tasks"])
 def create_task(body: TaskCreate, user=Depends(current_user),
-                db: sqlite3.Connection = Depends(get_db)):
+                db: Database = Depends(get_db)):
     cur = db.execute(
         "INSERT INTO tasks (user_id, title, details, status, priority, tag, due_date, completed_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
         (user["id"], body.title, body.details, body.status.value, body.priority.value,
          body.tag or "General", body.due_date.isoformat(),
          now_utc() if body.status == TaskStatus.done else None),
     )
+    task_id = cur.lastrowid
     db.commit()
-    return task_out(get_own_task(db, cur.lastrowid, user["id"]))
+    return task_out(get_own_task(db, task_id, user["id"]))
 
 
 @app.patch("/tasks/{task_id}", response_model=TaskOut, tags=["tasks"])
 def update_task(task_id: int, body: TaskUpdate, user=Depends(current_user),
-                db: sqlite3.Connection = Depends(get_db)):
+                db: Database = Depends(get_db)):
     task = get_own_task(db, task_id, user["id"])  # 404 для чужої/неіснуючої
 
     changes = clean_changes(body)
@@ -643,7 +579,7 @@ def update_task(task_id: int, body: TaskUpdate, user=Depends(current_user),
 
 @app.delete("/tasks/{task_id}", status_code=204, tags=["tasks"])
 def delete_task(task_id: int, user=Depends(current_user),
-                db: sqlite3.Connection = Depends(get_db)):
+                db: Database = Depends(get_db)):
     get_own_task(db, task_id, user["id"])
     db.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
     db.commit()
@@ -677,7 +613,7 @@ def week_start_date(today: date, week_start: str) -> date:
 
 @app.get("/stats", response_model=StatsOut, tags=["stats"])
 def get_stats(days: int = Query(default=7, ge=1, le=90),
-              user=Depends(current_user), db: sqlite3.Connection = Depends(get_db)):
+              user=Depends(current_user), db: Database = Depends(get_db)):
     settings = get_settings_row(db, user["id"])
     tz = ZoneInfo(settings["timezone"])
     today = datetime.now(tz).date()
@@ -709,8 +645,8 @@ def get_stats(days: int = Query(default=7, ge=1, le=90),
     counts = {row["status"]: row["n"] for row in db.execute(
         "SELECT status, COUNT(*) AS n FROM tasks WHERE user_id = ? GROUP BY status", (user["id"],))}
     overdue = db.execute(
-        "SELECT COUNT(*) FROM tasks WHERE user_id = ? AND status != 'done' AND due_date < ?",
-        (user["id"], today.isoformat())).fetchone()[0]
+        "SELECT COUNT(*) AS n FROM tasks WHERE user_id = ? AND status != 'done' AND due_date < ?",
+        (user["id"], today.isoformat())).fetchone()["n"]
 
     return StatsOut(
         days=day_stats,

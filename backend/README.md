@@ -1,6 +1,7 @@
 # TaskManager API
 
-REST API для iOS-застосунку TaskManager. FastAPI + SQLite.
+REST API для iOS-застосунку TaskManager. FastAPI + SQLAlchemy.
+Працює на SQLite (локально) і PostgreSQL (хмара) — залежно від `DATABASE_URL`.
 
 ## Запуск
 
@@ -13,15 +14,27 @@ uvicorn main:app --reload --host 0.0.0.0
 
 Swagger: http://127.0.0.1:8000/docs
 
+За замовчуванням база — SQLite-файл. Щоб працювати з PostgreSQL, задай змінну оточення:
+```bash
+export DATABASE_URL="postgresql+psycopg://user:pass@host/dbname"
+```
+
+## Деплой (Render + Neon)
+
+- `render.yaml` у корені репозиторію описує веб-сервіс (`rootDir: backend`)
+- База — безкоштовний Postgres на Neon; його connection string задається як `DATABASE_URL` у дашборді Render
+- Схема створюється автоматично при старті (`init_db`)
+
 База (`taskmanager.db`) створюється автоматично при першому запуску, нові колонки додаються міграцією при старті. Щоб скинути дані — зупинити сервер і видалити файл.
 
 ## Тести
 
 ```bash
-pytest -v
+pytest -v                                           # SQLite
+TEST_DATABASE_URL=postgresql+psycopg://... pytest    # PostgreSQL
 ```
 
-Кожен тест працює з окремою тимчасовою БД, тому робоча база не зачіпається.
+Кожен тест працює з чистою БД, тому робоча база не зачіпається. Той самий набір проходить на обох базах.
 
 ## Авторизація
 

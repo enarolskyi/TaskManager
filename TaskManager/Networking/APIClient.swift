@@ -19,15 +19,27 @@ enum APIError: LocalizedError {
 final class APIClient {
     static let shared = APIClient()
 
-    // Симулятор — localhost мака, реальний пристрій — IP мака у Wi-Fi
-    // IP може змінитися: ipconfig getifaddr en0
-    private static let macIP = "192.168.0.226"
+    // Куди ходить застосунок, залежить від вибору Cloud / Local Mac у More → Server.
+    // Обчислюється на кожен запит, тож перемикання діє одразу.
+    static let macIP = "192.168.0.226"   // IP мака у Wi-Fi: ipconfig getifaddr en0
 
-    #if targetEnvironment(simulator)
-    private let baseURL = URL(string: "http://127.0.0.1:8000")!
-    #else
-    private let baseURL = URL(string: "http://\(APIClient.macIP):8000")!
-    #endif
+    private var baseURL: URL {
+        switch ServerEnvironment.current {
+        case .cloud:
+            return URL(string: ServerEnvironment.cloudURL) ?? Self.localURL
+        case .local:
+            return Self.localURL
+        }
+    }
+
+    private static var localURL: URL {
+        // Симулятор працює на самому маку (127.0.0.1), реальний пристрій шукає мак у Wi-Fi
+        #if targetEnvironment(simulator)
+        return URL(string: "http://127.0.0.1:8000")!
+        #else
+        return URL(string: "http://\(macIP):8000")!
+        #endif
+    }
 
     // TODO: перенести токен у Keychain
     var token: String? {

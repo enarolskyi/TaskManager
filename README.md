@@ -31,8 +31,8 @@ A full-stack task manager built from scratch: a native **iOS app (SwiftUI)** and
 |---|---|
 | iOS | Swift, SwiftUI, Observation (`@Observable`), async/await, URLSession |
 | Architecture | MVVM |
-| Backend | Python, FastAPI, Pydantic, SQLite |
-| Tests | pytest (74 API tests), GitHub Actions CI |
+| Backend | Python, FastAPI, Pydantic, SQLAlchemy (SQLite local / PostgreSQL in cloud) |
+| Tests | pytest (74 API tests, run on both SQLite and PostgreSQL), GitHub Actions CI |
 
 ## Project structure
 
@@ -49,7 +49,7 @@ backend/                FastAPI server + tests
 
 ## Run locally
 
-**Backend**
+**Backend** (SQLite by default)
 ```bash
 cd backend
 python3 -m venv venv
@@ -59,9 +59,14 @@ uvicorn main:app --reload --host 0.0.0.0
 ```
 Swagger: http://127.0.0.1:8000/docs
 
+Set `DATABASE_URL` to a Postgres connection string to run against PostgreSQL instead of SQLite.
+
+**Deploy:** `render.yaml` defines a Render web service (`rootDir: backend`); set `DATABASE_URL` to a managed Postgres (e.g. Neon) in the Render dashboard.
+
 **Tests**
 ```bash
-cd backend && pytest -v
+cd backend && pytest -v                          # SQLite
+TEST_DATABASE_URL=postgresql+psycopg://... pytest # PostgreSQL
 ```
 
 **iOS app**

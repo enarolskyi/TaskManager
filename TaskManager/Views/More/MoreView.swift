@@ -43,6 +43,11 @@ struct MoreView: View {
                     }
                     .accessibilityIdentifier("more.notifications")
 
+                    NavigationLink { ServerView() } label: {
+                        Label("Server", systemImage: "externaldrive.connected.to.line.below")
+                    }
+                    .accessibilityIdentifier("more.server")
+
                     NavigationLink { HelpFeedbackView() } label: {
                         Label("Help & Feedback", systemImage: "questionmark.circle")
                     }

@@ -14,12 +14,45 @@ VALID_USER = {
 }
 
 
+# Тести ганяються і на SQLite (за замовчуванням), і на Postgres:
+#   TEST_DATABASE_URL=postgresql+psycopg://... pytest
+PG_URL = os.environ.get("TEST_DATABASE_URL")
+
+
+def _reload(sqlite_path=None):
+    import database
+    import main
+    if PG_URL:
+        os.environ["DATABASE_URL"] = PG_URL
+        os.environ.pop("TASKMANAGER_DB", None)
+    else:
+        os.environ.pop("DATABASE_URL", None)
+        os.environ["TASKMANAGER_DB"] = sqlite_path
+    importlib.reload(database)
+    importlib.reload(main)
+    return database, main
+
+
 @pytest.fixture
 def client(tmp_path):
-    os.environ["TASKMANAGER_DB"] = str(tmp_path / "test.db")
-    import main
-    importlib.reload(main)
+    database, main = _reload(str(tmp_path / "test.db"))
+    if PG_URL:
+        # Чиста схема між тестами (на SQLite це робить окремий tmp-файл)
+        database.metadata.drop_all(database.engine)
+        database.init_db()
     return TestClient(main.app)
+
+
+def run_sql(sql, params=()):
+    """Пряма зміна БД у тестах — через той самий engine, тож працює на обох базах"""
+    import main
+    gen = main.get_db()
+    db = next(gen)
+    try:
+        db.execute(sql, params)
+        db.commit()
+    finally:
+        gen.close()
 
 
 @pytest.fixture
@@ -322,10 +355,7 @@ def new_task(client, headers, **fields):
 
 def set_completed_at(task_id, when: datetime):
     # Підміняємо дату виконання напряму в БД, щоб перевірити минулі дні
-    conn = sqlite3.connect(os.environ["TASKMANAGER_DB"])
-    conn.execute("UPDATE tasks SET completed_at = ? WHERE id = ?", (when.isoformat(), task_id))
-    conn.commit()
-    conn.close()
+    run_sql("UPDATE tasks SET completed_at = ? WHERE id = ?", (when.isoformat(), task_id))
 
 
 def test_completed_at_set_and_cleared(client, auth_headers):
@@ -416,6 +446,7 @@ def test_stats_days_validation(client, auth_headers, days):
     assert client.get(f"/stats?days={days}", headers=auth_headers).status_code == 422
 
 
+@pytest.mark.skipif(PG_URL is not None, reason="міграція зі старої SQLite-схеми — тільки для SQLite")
 def test_migration_adds_new_columns(tmp_path):
     # База старого формату (без completed_at і цілей) має оновитися при старті
     path = tmp_path / "old.db"
@@ -427,9 +458,7 @@ def test_migration_adds_new_columns(tmp_path):
     """)
     conn.close()
 
-    os.environ["TASKMANAGER_DB"] = str(path)
-    import main
-    importlib.reload(main)
+    _reload(str(path))
 
     conn = sqlite3.connect(path)
     task_cols = {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}
@@ -509,11 +538,8 @@ def test_reset_too_many_attempts(client, auth_headers, sent_emails):
 
 def test_reset_expired_code(client, auth_headers, sent_emails):
     request_reset(client)
-    conn = sqlite3.connect(os.environ["TASKMANAGER_DB"])
     past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
-    conn.execute("UPDATE password_resets SET expires_at = ?", (past,))
-    conn.commit()
-    conn.close()
+    run_sql("UPDATE password_resets SET expires_at = ?", (past,))
     assert do_reset(client, reset_code(sent_emails)).status_code == 400
 
 
@@ -521,11 +547,8 @@ def test_new_code_replaces_old(client, auth_headers, sent_emails):
     request_reset(client)
     old_code = reset_code(sent_emails)
     # Обходимо 60-секундний cooldown, щоб отримати новий код
-    conn = sqlite3.connect(os.environ["TASKMANAGER_DB"])
-    conn.execute("UPDATE password_resets SET created_at = ?",
-                 ((datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat(),))
-    conn.commit()
-    conn.close()
+    run_sql("UPDATE password_resets SET created_at = ?",
+            ((datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat(),))
     request_reset(client)
     new_code = reset_code(sent_emails)
     if new_code != old_code:
