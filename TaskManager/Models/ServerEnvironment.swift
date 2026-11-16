@@ -21,7 +21,7 @@ enum ServerEnvironment: String, CaseIterable, Identifiable {
     }
 
     // URL хмарного бекенду (Render). Поки не задеплоєно — порожній, редагується в More → Server.
-    static let defaultCloudURL = ""
+    static let defaultCloudURL = "https://taskmanager-api-npie.onrender.com"
 
     static var current: ServerEnvironment {
         get {
