@@ -128,9 +128,10 @@ final class NotificationManager {
         let now = Date.now
         let upcoming: [(TaskItem, Date)] = tasks
             .filter { $0.status != .done }
-            .compactMap { task in
-                guard let fireDate = date(task.dueDate, atMinutes: reminderMinutes), fireDate > now else { return nil }
-                return (task, fireDate)
+            .compactMap { task -> (TaskItem, Date)? in
+                // Нагадуємо на точний час дедлайну задачі
+                guard task.dueDate > now else { return nil }
+                return (task, task.dueDate)
             }
             .sorted { $0.1 < $1.1 }
 

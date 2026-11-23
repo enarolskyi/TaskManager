@@ -66,20 +66,29 @@ final class APIClient {
         return formatter
     }()
 
+    // due_date з часом: наївний локальний datetime (без офсету), тлумачиться в поточній TZ
+    static let dateTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        return formatter
+    }()
+
     // API використовує snake_case
     private let decoder: JSONDecoder = {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
-        // Дати двох видів: "2026-11-15" (due_date) і "2026-11-15T09:30:00+00:00" (completed_at)
+        // due_date — локальний datetime "2026-11-15T09:00:00"; completed_at — UTC з офсетом; legacy — лише день
         decoder.dateDecodingStrategy = .custom { decoder in
             let container = try decoder.singleValueContainer()
             let value = try container.decode(String.self)
 
-            let dayFormatter = DateFormatter()
-            dayFormatter.dateFormat = "yyyy-MM-dd"
-            dayFormatter.locale = Locale(identifier: "en_US_POSIX")
-            if let date = dayFormatter.date(from: value) { return date }
-            if let date = ISO8601DateFormatter().date(from: value) { return date }
+            if value.contains("+") || value.hasSuffix("Z") {
+                if let date = ISO8601DateFormatter().date(from: value) { return date }
+            }
+            if value.contains("T"), let date = APIClient.dateTimeFormatter.date(from: value) { return date }
+            if let date = APIClient.dateFormatter.date(from: value) { return date }
 
             throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid date: \(value)")
         }
@@ -89,7 +98,7 @@ final class APIClient {
     private let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
         encoder.keyEncodingStrategy = .convertToSnakeCase
-        encoder.dateEncodingStrategy = .formatted(APIClient.dateFormatter)
+        encoder.dateEncodingStrategy = .formatted(APIClient.dateTimeFormatter)
         return encoder
     }()
 

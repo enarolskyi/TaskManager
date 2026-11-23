@@ -33,7 +33,7 @@ struct TaskFormView: View {
             _title = State(initialValue: "")
             _details = State(initialValue: "")
             _tag = State(initialValue: "")
-            _dueDate = State(initialValue: initialDate)
+            _dueDate = State(initialValue: Self.defaultDueDate(for: initialDate))
             _priority = State(initialValue: .low)
             _status = State(initialValue: .todo)
             _recurrence = State(initialValue: .none)
@@ -51,6 +51,11 @@ struct TaskFormView: View {
     private var editingTask: TaskItem? {
         if case .edit(let task) = mode { return task }
         return nil
+    }
+
+    // Нові задачі за замовчуванням на 09:00 обраного дня
+    private static func defaultDueDate(for date: Date) -> Date {
+        Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: date) ?? date
     }
 
     // Актуальна версія задачі зі стора — щоб бачити свіжі підзадачі після їх зміни
@@ -85,7 +90,7 @@ struct TaskFormView: View {
         if trimmedTitle != task.title { request.title = trimmedTitle }
         if trimmedDetails != task.details { request.details = trimmedDetails }
         if normalizedTag != task.tag { request.tag = normalizedTag }
-        if !Calendar.current.isDate(dueDate, inSameDayAs: task.dueDate) { request.dueDate = dueDate }
+        if !Calendar.current.isDate(dueDate, equalTo: task.dueDate, toGranularity: .minute) { request.dueDate = dueDate }
         if priority != task.priority { request.priority = priority }
         if status != task.status { request.status = status }
         if recurrence != task.recurrence { request.recurrence = recurrence }
@@ -127,7 +132,7 @@ struct TaskFormView: View {
                 }
 
                 Section {
-                    DatePicker("Due date", selection: $dueDate, displayedComponents: .date)
+                    DatePicker("Due date", selection: $dueDate, displayedComponents: [.date, .hourAndMinute])
                         .accessibilityIdentifier("taskForm.dueDate")
                     HStack {
                         TextField("Enter a tag", text: $tag)

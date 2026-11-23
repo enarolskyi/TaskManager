@@ -113,9 +113,10 @@ struct TaskCardView: View {
 
     private var dueDateText: String {
         let calendar = Calendar.current
-        if calendar.isDateInToday(task.dueDate) { return "Today" }
-        if calendar.isDateInTomorrow(task.dueDate) { return "Tomorrow" }
-        return task.dueDate.formatted(.dateTime.day().month(.abbreviated))
+        let time = task.dueDate.formatted(.dateTime.hour().minute())
+        if calendar.isDateInToday(task.dueDate) { return "Today \(time)" }
+        if calendar.isDateInTomorrow(task.dueDate) { return "Tomorrow \(time)" }
+        return task.dueDate.formatted(.dateTime.day().month(.abbreviated).hour().minute())
     }
 }
 
