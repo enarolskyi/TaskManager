@@ -57,6 +57,7 @@ struct NewTaskRequest: Encodable {
     let priority: TaskPriority
     let tag: String
     let dueDate: Date
+    let recurrence: Recurrence
 }
 
 // nil-поля не потрапляють у JSON, тож PATCH змінює лише передане
@@ -67,11 +68,22 @@ struct TaskUpdateRequest: Encodable {
     var priority: TaskPriority?
     var tag: String?
     var dueDate: Date?
+    var recurrence: Recurrence?
 
     var isEmpty: Bool {
-        title == nil && details == nil && status == nil
-            && priority == nil && tag == nil && dueDate == nil
+        title == nil && details == nil && status == nil && priority == nil
+            && tag == nil && dueDate == nil && recurrence == nil
     }
+}
+
+// Підзадачі
+struct SubtaskCreateRequest: Encodable {
+    let title: String
+}
+
+struct SubtaskUpdateRequest: Encodable {
+    var title: String?
+    var isDone: Bool?
 }
 
 // GET /stats

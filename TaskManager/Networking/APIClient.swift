@@ -116,6 +116,11 @@ final class APIClient {
         _ = try await perform("DELETE", path, body: nil)
     }
 
+    /// DELETE, що повертає оновлену сутність (бек віддає батьківську задачу після видалення підзадачі)
+    func delete<T: Decodable>(_ path: String) async throws -> T {
+        try decode(try await perform("DELETE", path, body: nil))
+    }
+
     // MARK: - Private
 
     private func perform(_ method: String, _ path: String, body: (any Encodable)?) async throws -> Data {

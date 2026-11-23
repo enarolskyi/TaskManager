@@ -18,10 +18,13 @@ struct TaskFormView: View {
     @State private var dueDate: Date
     @State private var priority: TaskPriority
     @State private var status: TaskStatus
+    @State private var recurrence: Recurrence
 
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var isShowingDeleteConfirm = false
+
+    @State private var newSubtaskTitle = ""   // поле "додати пункт" у чеклисті
 
     init(mode: Mode) {
         self.mode = mode
@@ -33,6 +36,7 @@ struct TaskFormView: View {
             _dueDate = State(initialValue: initialDate)
             _priority = State(initialValue: .low)
             _status = State(initialValue: .todo)
+            _recurrence = State(initialValue: .none)
         case .edit(let task):
             _title = State(initialValue: task.title)
             _details = State(initialValue: task.details)
@@ -40,12 +44,25 @@ struct TaskFormView: View {
             _dueDate = State(initialValue: task.dueDate)
             _priority = State(initialValue: task.priority)
             _status = State(initialValue: task.status)
+            _recurrence = State(initialValue: task.recurrence)
         }
     }
 
     private var editingTask: TaskItem? {
         if case .edit(let task) = mode { return task }
         return nil
+    }
+
+    // Актуальна версія задачі зі стора — щоб бачити свіжі підзадачі після їх зміни
+    private var currentTask: TaskItem? {
+        guard let id = editingTask?.id else { return nil }
+        return store.tasks.first { $0.id == id } ?? editingTask
+    }
+
+    // Пропозиція дати з назви — показуємо чип лише якщо вона відрізняється від обраної
+    private var dateSuggestion: DateParser.Suggestion? {
+        guard let suggestion = DateParser.parse(title) else { return nil }
+        return suggestion.date == dueDate ? nil : suggestion
     }
 
     private var trimmedTitle: String {
@@ -71,12 +88,15 @@ struct TaskFormView: View {
         if !Calendar.current.isDate(dueDate, inSameDayAs: task.dueDate) { request.dueDate = dueDate }
         if priority != task.priority { request.priority = priority }
         if status != task.status { request.status = status }
+        if recurrence != task.recurrence { request.recurrence = recurrence }
         return request
     }
 
     private var canSave: Bool {
         guard !trimmedTitle.isEmpty, !isSaving else { return false }
-        return editingTask == nil || !changes.isEmpty
+        // У редагуванні кнопка активна завжди: чекліст зберігається одразу,
+        // а поля — через PATCH (порожній PATCH просто пропускається у store.update)
+        return true
     }
 
     var body: some View {
@@ -88,6 +108,22 @@ struct TaskFormView: View {
                     TextField("Enter description", text: $details, axis: .vertical)
                         .lineLimit(3...6)
                         .accessibilityIdentifier("taskForm.description")
+
+                    // Розумний ввід дати: якщо в назві є "завтра о 18" — пропонуємо застосувати
+                    if let suggestion = dateSuggestion {
+                        Button {
+                            withAnimation { dueDate = suggestion.date }
+                        } label: {
+                            HStack {
+                                Image(systemName: "calendar.badge.clock")
+                                Text("Set date: \(suggestion.label)")
+                                Spacer()
+                                Text("Apply").fontWeight(.semibold)
+                            }
+                            .font(.subheadline)
+                        }
+                        .accessibilityIdentifier("taskForm.dateSuggestion")
+                    }
                 }
 
                 Section {
@@ -120,6 +156,19 @@ struct TaskFormView: View {
                     .accessibilityIdentifier("taskForm.priority")
                 }
 
+                Section {
+                    Picker("Repeat", selection: $recurrence) {
+                        ForEach(Recurrence.allCases) { option in
+                            Text(option.title).tag(option)
+                        }
+                    }
+                    .accessibilityIdentifier("taskForm.recurrence")
+                } footer: {
+                    if recurrence != .none {
+                        Text("При завершенні створиться наступна задача з перенесеною датою.")
+                    }
+                }
+
                 // Статус міняємо тільки для існуючої задачі, нова завжди To-do
                 if editingTask != nil {
                     Section("Status") {
@@ -131,6 +180,11 @@ struct TaskFormView: View {
                         .pickerStyle(.segmented)
                         .accessibilityIdentifier("taskForm.status")
                     }
+                }
+
+                // Чекліст — лише для збереженої задачі, бо підзадачі живуть на бекенді
+                if let task = currentTask {
+                    checklistSection(for: task)
                 }
 
                 if let errorMessage {
@@ -181,6 +235,62 @@ struct TaskFormView: View {
         }
     }
 
+    @ViewBuilder
+    private func checklistSection(for task: TaskItem) -> some View {
+        Section {
+            ForEach(task.subtasks) { subtask in
+                Button {
+                    Task { errorMessage = await store.toggleSubtask(subtask, in: task) }
+                } label: {
+                    HStack {
+                        Image(systemName: subtask.isDone ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(subtask.isDone ? Color.accentColor : .secondary)
+                        Text(subtask.title)
+                            .strikethrough(subtask.isDone)
+                            .foregroundStyle(subtask.isDone ? .secondary : .primary)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+            .onDelete { offsets in
+                let targets = offsets.map { task.subtasks[$0] }
+                Task {
+                    for subtask in targets {
+                        errorMessage = await store.deleteSubtask(subtask, in: task)
+                    }
+                }
+            }
+
+            HStack {
+                TextField("Add an item", text: $newSubtaskTitle)
+                    .accessibilityIdentifier("taskForm.newSubtask")
+                    .onSubmit { addSubtask(to: task) }
+                Button {
+                    addSubtask(to: task)
+                } label: {
+                    Image(systemName: "plus.circle.fill")
+                }
+                .disabled(newSubtaskTitle.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        } header: {
+            HStack {
+                Text("Checklist")
+                Spacer()
+                if task.hasSubtasks {
+                    Text("\(task.doneSubtasks)/\(task.subtasks.count)")
+                        .monospacedDigit()
+                }
+            }
+        }
+    }
+
+    private func addSubtask(to task: TaskItem) {
+        let title = newSubtaskTitle.trimmingCharacters(in: .whitespaces)
+        guard !title.isEmpty else { return }
+        newSubtaskTitle = ""
+        Task { errorMessage = await store.addSubtask(to: task, title: title) }
+    }
+
     private func save() async {
         isSaving = true
         errorMessage = nil
@@ -193,7 +303,8 @@ struct TaskFormView: View {
                 details: trimmedDetails,
                 priority: priority,
                 tag: normalizedTag,
-                dueDate: dueDate
+                dueDate: dueDate,
+                recurrence: recurrence
             ))
         }
 

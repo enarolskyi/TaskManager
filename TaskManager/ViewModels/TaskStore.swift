@@ -60,6 +60,31 @@ final class TaskStore {
         report(await update(task, with: TaskUpdateRequest(status: status)))
     }
 
+    // Підзадачі — бек повертає оновлену батьківську задачу, тож просто підміняємо її в списку
+
+    func addSubtask(to task: TaskItem, title: String) async -> String? {
+        await perform {
+            let updated: TaskItem = try await api.post(
+                "/tasks/\(task.id)/subtasks", body: SubtaskCreateRequest(title: title))
+            replace(updated)
+        }
+    }
+
+    func toggleSubtask(_ subtask: Subtask, in task: TaskItem) async -> String? {
+        await perform {
+            let updated: TaskItem = try await api.patch(
+                "/subtasks/\(subtask.id)", body: SubtaskUpdateRequest(isDone: !subtask.isDone))
+            replace(updated)
+        }
+    }
+
+    func deleteSubtask(_ subtask: Subtask, in task: TaskItem) async -> String? {
+        await perform {
+            let updated: TaskItem = try await api.delete("/subtasks/\(subtask.id)")
+            replace(updated)
+        }
+    }
+
     func toggleComplete(_ task: TaskItem) async {
         await move(task, to: task.status == .done ? .todo : .done)
     }

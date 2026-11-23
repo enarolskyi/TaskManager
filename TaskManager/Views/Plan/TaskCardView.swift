@@ -19,9 +19,17 @@ struct TaskCardView: View {
             .accessibilityIdentifier("task.checkbox")
 
             VStack(alignment: .leading, spacing: 6) {
-                Text(task.title)
-                    .font(.subheadline.weight(.medium))
-                    .strikethrough(isDone)
+                HStack(spacing: 6) {
+                    Text(task.title)
+                        .font(.subheadline.weight(.medium))
+                        .strikethrough(isDone)
+                    if task.recurrence != .none {
+                        Image(systemName: "repeat")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel("Recurring")
+                    }
+                }
 
                 if !task.details.isEmpty {
                     Text(task.details)
@@ -59,6 +67,20 @@ struct TaskCardView: View {
                 }
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+
+                // Прогрес чеклиста: "2/5" + смужка
+                if task.hasSubtasks {
+                    HStack(spacing: 6) {
+                        Image(systemName: "checklist")
+                        Text("\(task.doneSubtasks)/\(task.subtasks.count)")
+                            .monospacedDigit()
+                        ProgressView(value: Double(task.doneSubtasks),
+                                     total: Double(task.subtasks.count))
+                            .frame(maxWidth: 80)
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                }
             }
 
             Spacer(minLength: 0)
