@@ -242,7 +242,8 @@ def test_filter_tasks_by_date(client, auth_headers):
 
     assert len(client.get("/tasks?due_date=2026-11-15", headers=auth_headers).json()) == 2
     week = client.get("/tasks?due_from=2026-11-14&due_to=2026-11-16", headers=auth_headers).json()
-    assert [t["due_date"] for t in week] == ["2026-11-14", "2026-11-15", "2026-11-15"]
+    # фільтр по дню; due_date повертається з часом (день без часу → 00:00:00)
+    assert [t["due_date"][:10] for t in week] == ["2026-11-14", "2026-11-15", "2026-11-15"]
 
 
 def test_patch_task_with_null_is_ignored(client, auth_headers):
@@ -580,14 +581,14 @@ def test_create_with_recurrence(client, auth_headers):
 
 
 def test_completing_recurring_spawns_next(client, auth_headers):
-    tid = client.post("/tasks", json={**NEW_TASK, "due_date": "2026-11-20", "recurrence": "weekly"},
+    tid = client.post("/tasks", json={**NEW_TASK, "due_date": "2026-11-20T09:00:00", "recurrence": "weekly"},
                       headers=auth_headers).json()["id"]
     complete(client, auth_headers, tid)
     tasks = client.get("/tasks", headers=auth_headers).json()
     done = [t for t in tasks if t["status"] == "done"]
     todo = [t for t in tasks if t["status"] == "todo"]
     assert len(done) == 1 and len(todo) == 1
-    assert todo[0]["due_date"] == "2026-11-27"        # +7 днів
+    assert todo[0]["due_date"] == "2026-11-27T09:00:00"   # +7 днів, час збережено
     assert todo[0]["recurrence"] == "weekly"
 
 
@@ -605,8 +606,8 @@ def test_recurring_spawns_once(client, auth_headers):
 
 
 @pytest.mark.parametrize("due,recur,expected", [
-    ("2026-11-20", "daily", "2026-11-21"),
-    ("2026-01-31", "monthly", "2026-02-28"),   # кінець місяця
+    ("2026-11-20T09:00:00", "daily", "2026-11-21T09:00:00"),
+    ("2026-01-31T18:30:00", "monthly", "2026-02-28T18:30:00"),   # кінець місяця, час збережено
 ])
 def test_recurrence_next_due(client, auth_headers, due, recur, expected):
     tid = client.post("/tasks", json={**NEW_TASK, "due_date": due, "recurrence": recur},

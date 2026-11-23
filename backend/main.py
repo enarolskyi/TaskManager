@@ -198,7 +198,7 @@ class TaskCreate(BaseModel):
     status: TaskStatus = TaskStatus.todo
     priority: TaskPriority = TaskPriority.medium
     tag: Tag = "General"
-    due_date: date
+    due_date: datetime   # дата + час дедлайну
     recurrence: Recurrence = Recurrence.none
 
     @field_validator("title")
@@ -215,7 +215,7 @@ class TaskUpdate(BaseModel):
     status: Optional[TaskStatus] = None
     priority: Optional[TaskPriority] = None
     tag: Optional[Tag] = None
-    due_date: Optional[date] = None
+    due_date: Optional[datetime] = None
     recurrence: Optional[Recurrence] = None
 
 
@@ -255,7 +255,7 @@ class TaskOut(BaseModel):
     status: TaskStatus
     priority: TaskPriority
     tag: str
-    due_date: date
+    due_date: datetime
     completed_at: Optional[datetime] = None
     recurrence: Recurrence = Recurrence.none
     subtasks: list[SubtaskOut] = []
@@ -508,16 +508,16 @@ def now_utc() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-def add_months(d: date, n: int) -> date:
+def add_months(d: datetime, n: int) -> datetime:
     import calendar
     month = d.month - 1 + n
     year = d.year + month // 12
     month = month % 12 + 1
     day = min(d.day, calendar.monthrange(year, month)[1])   # напр. 31 січня + 1 міс = 28/29 лют
-    return date(year, month, day)
+    return d.replace(year=year, month=month, day=day)        # replace зберігає час
 
 
-def next_due(d: date, recurrence: str) -> date:
+def next_due(d: datetime, recurrence: str) -> datetime:
     if recurrence == Recurrence.daily.value:
         return d + timedelta(days=1)
     if recurrence == Recurrence.weekly.value:
@@ -580,15 +580,16 @@ def list_tasks(status_filter: Optional[TaskStatus] = None,
     if status_filter:
         sql += " AND status = ?"
         params.append(status_filter.value)
-    # ISO-дати коректно порівнюються як рядки
+    # Фільтри по даті дивляться лише на день (due_date тепер містить і час).
+    # substr(...,1,10) = 'YYYY-MM-DD' однаково працює на SQLite та Postgres
     if due_date:
-        sql += " AND due_date = ?"
+        sql += " AND substr(due_date, 1, 10) = ?"
         params.append(due_date.isoformat())
     if due_from:
-        sql += " AND due_date >= ?"
+        sql += " AND substr(due_date, 1, 10) >= ?"
         params.append(due_from.isoformat())
     if due_to:
-        sql += " AND due_date <= ?"
+        sql += " AND substr(due_date, 1, 10) <= ?"
         params.append(due_to.isoformat())
     if search and search.strip():
         # LOWER(...) LIKE — нечутливо до регістру й однаково на SQLite та Postgres
@@ -632,7 +633,7 @@ def create_task(body: TaskCreate, user=Depends(current_user),
 
 def spawn_next_occurrence(db, task):
     """Для повторюваної задачі створює наступну копію (todo) з новою датою"""
-    new_due = next_due(date.fromisoformat(task["due_date"]), task["recurrence"])
+    new_due = next_due(datetime.fromisoformat(task["due_date"]), task["recurrence"])
     db.execute(
         "INSERT INTO tasks (user_id, title, details, status, priority, tag, due_date, completed_at, recurrence) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",

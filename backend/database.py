@@ -132,6 +132,11 @@ def _migrate():
         for table_, column, decl in additions:
             if table_ in existing and column not in existing[table_]:
                 conn.execute(text(f"ALTER TABLE {table_} ADD COLUMN {column} {decl}"))
+        # due_date тепер з часом: старим задачам (лише дата) проставляємо 09:00
+        if "tasks" in existing:
+            conn.execute(text(
+                "UPDATE tasks SET due_date = due_date || 'T09:00:00' "
+                "WHERE due_date IS NOT NULL AND due_date NOT LIKE '%T%'"))
 
 
 # --- Обгортка з'єднання у стилі sqlite3 ---
