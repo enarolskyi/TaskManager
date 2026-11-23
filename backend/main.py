@@ -185,6 +185,13 @@ class SettingsUpdate(BaseModel):
         return v
 
 
+class Recurrence(str, Enum):
+    none = "none"
+    daily = "daily"
+    weekly = "weekly"
+    monthly = "monthly"
+
+
 class TaskCreate(BaseModel):
     title: str
     details: str = ""
@@ -192,6 +199,7 @@ class TaskCreate(BaseModel):
     priority: TaskPriority = TaskPriority.medium
     tag: Tag = "General"
     due_date: date
+    recurrence: Recurrence = Recurrence.none
 
     @field_validator("title")
     @classmethod
@@ -208,6 +216,7 @@ class TaskUpdate(BaseModel):
     priority: Optional[TaskPriority] = None
     tag: Optional[Tag] = None
     due_date: Optional[date] = None
+    recurrence: Optional[Recurrence] = None
 
 
 class TaskSort(str, Enum):
@@ -215,6 +224,28 @@ class TaskSort(str, Enum):
     due_date = "due_date"
     priority = "priority"
     name = "name"
+
+
+class SubtaskCreate(BaseModel):
+    title: str
+
+    @field_validator("title")
+    @classmethod
+    def check_title(cls, v):
+        if not v.strip():
+            raise ValueError("Title is required")
+        return v.strip()
+
+
+class SubtaskUpdate(BaseModel):
+    title: Optional[str] = None
+    is_done: Optional[bool] = None
+
+
+class SubtaskOut(BaseModel):
+    id: int
+    title: str
+    is_done: bool
 
 
 class TaskOut(BaseModel):
@@ -226,6 +257,8 @@ class TaskOut(BaseModel):
     tag: str
     due_date: date
     completed_at: Optional[datetime] = None
+    recurrence: Recurrence = Recurrence.none
+    subtasks: list[SubtaskOut] = []
 
 
 def clean_changes(model: BaseModel) -> dict:
@@ -467,7 +500,7 @@ def update_settings(body: SettingsUpdate, user=Depends(current_user),
 
 # --- Tasks ---
 
-TASK_COLUMNS = "id, title, details, status, priority, tag, due_date, completed_at"
+TASK_COLUMNS = "id, title, details, status, priority, tag, due_date, completed_at, recurrence"
 
 
 def now_utc() -> str:
@@ -475,8 +508,42 @@ def now_utc() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-def task_out(row) -> TaskOut:
-    return TaskOut(**dict(row))
+def add_months(d: date, n: int) -> date:
+    import calendar
+    month = d.month - 1 + n
+    year = d.year + month // 12
+    month = month % 12 + 1
+    day = min(d.day, calendar.monthrange(year, month)[1])   # напр. 31 січня + 1 міс = 28/29 лют
+    return date(year, month, day)
+
+
+def next_due(d: date, recurrence: str) -> date:
+    if recurrence == Recurrence.daily.value:
+        return d + timedelta(days=1)
+    if recurrence == Recurrence.weekly.value:
+        return d + timedelta(weeks=1)
+    if recurrence == Recurrence.monthly.value:
+        return add_months(d, 1)
+    return d
+
+
+def load_subtasks(db, task_ids: list[int]) -> dict[int, list[SubtaskOut]]:
+    grouped: dict[int, list[SubtaskOut]] = {tid: [] for tid in task_ids}
+    if not task_ids:
+        return grouped
+    placeholders = ", ".join("?" * len(task_ids))
+    rows = db.execute(
+        f"SELECT id, task_id, title, is_done FROM subtasks "
+        f"WHERE task_id IN ({placeholders}) ORDER BY position, id", task_ids).fetchall()
+    for r in rows:
+        grouped[r["task_id"]].append(SubtaskOut(id=r["id"], title=r["title"], is_done=bool(r["is_done"])))
+    return grouped
+
+
+def task_out(row, subtasks: Optional[list[SubtaskOut]] = None) -> TaskOut:
+    data = dict(row)
+    data["subtasks"] = subtasks or []
+    return TaskOut(**data)
 
 
 def get_own_task(db, task_id: int, user_id: int):
@@ -486,6 +553,12 @@ def get_own_task(db, task_id: int, user_id: int):
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Task not found")
     return row
+
+
+def task_response(db, task_id: int, user_id: int) -> TaskOut:
+    """Задача разом з її підзадачами — для відповіді на одну задачу"""
+    row = get_own_task(db, task_id, user_id)
+    return task_out(row, load_subtasks(db, [task_id])[task_id])
 
 
 @app.get("/tasks", response_model=list[TaskOut], tags=["tasks"])
@@ -536,22 +609,37 @@ def list_tasks(status_filter: Optional[TaskStatus] = None,
         TaskSort.name: "LOWER(title), id",
     }
     sql += f" ORDER BY {order_by[sort]}"
-    return [task_out(r) for r in db.execute(sql, params).fetchall()]
+
+    rows = db.execute(sql, params).fetchall()
+    subtasks = load_subtasks(db, [r["id"] for r in rows])   # одним запитом на всі задачі
+    return [task_out(r, subtasks[r["id"]]) for r in rows]
 
 
 @app.post("/tasks", response_model=TaskOut, status_code=201, tags=["tasks"])
 def create_task(body: TaskCreate, user=Depends(current_user),
                 db: Database = Depends(get_db)):
     cur = db.execute(
-        "INSERT INTO tasks (user_id, title, details, status, priority, tag, due_date, completed_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO tasks (user_id, title, details, status, priority, tag, due_date, completed_at, recurrence) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
         (user["id"], body.title, body.details, body.status.value, body.priority.value,
          body.tag or "General", body.due_date.isoformat(),
-         now_utc() if body.status == TaskStatus.done else None),
+         now_utc() if body.status == TaskStatus.done else None, body.recurrence.value),
     )
     task_id = cur.lastrowid
     db.commit()
-    return task_out(get_own_task(db, task_id, user["id"]))
+    return task_response(db, task_id, user["id"])
+
+
+def spawn_next_occurrence(db, task):
+    """Для повторюваної задачі створює наступну копію (todo) з новою датою"""
+    new_due = next_due(date.fromisoformat(task["due_date"]), task["recurrence"])
+    db.execute(
+        "INSERT INTO tasks (user_id, title, details, status, priority, tag, due_date, completed_at, recurrence) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (task["user_id"], task["title"], task["details"], TaskStatus.todo.value,
+         task["priority"], task["tag"], new_due.isoformat(), None, task["recurrence"]),
+    )
+    db.commit()
 
 
 @app.patch("/tasks/{task_id}", response_model=TaskOut, tags=["tasks"])
@@ -565,7 +653,8 @@ def update_task(task_id: int, body: TaskUpdate, user=Depends(current_user),
 
     # completed_at ставимо тільки при переході в done, щоб повторний PATCH не зсував дату
     new_status = changes.get("status")
-    if new_status == TaskStatus.done.value and task["status"] != TaskStatus.done.value:
+    becoming_done = new_status == TaskStatus.done.value and task["status"] != TaskStatus.done.value
+    if becoming_done:
         changes["completed_at"] = now_utc()
     elif new_status and new_status != TaskStatus.done.value:
         changes["completed_at"] = None
@@ -574,15 +663,75 @@ def update_task(task_id: int, body: TaskUpdate, user=Depends(current_user),
         sets = ", ".join(f"{k} = ?" for k in changes)
         db.execute(f"UPDATE tasks SET {sets} WHERE id = ?", (*changes.values(), task_id))
         db.commit()
-    return task_out(get_own_task(db, task_id, user["id"]))
+
+    # Повторювану задачу виконали → створюємо наступну за розкладом
+    updated = get_own_task(db, task_id, user["id"])
+    if becoming_done and updated["recurrence"] != Recurrence.none.value:
+        # user_id беремо з повного рядка задачі
+        full = db.execute("SELECT user_id, title, details, priority, tag, due_date, recurrence "
+                          "FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        spawn_next_occurrence(db, full)
+
+    return task_response(db, task_id, user["id"])
 
 
 @app.delete("/tasks/{task_id}", status_code=204, tags=["tasks"])
 def delete_task(task_id: int, user=Depends(current_user),
                 db: Database = Depends(get_db)):
     get_own_task(db, task_id, user["id"])
-    db.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+    db.execute("DELETE FROM tasks WHERE id = ?", (task_id,))   # підзадачі видаляться каскадно
     db.commit()
+
+
+# --- Subtasks (чекліст усередині задачі) ---
+
+def get_own_subtask(db, subtask_id: int, user_id: int):
+    row = db.execute(
+        "SELECT s.id, s.task_id, s.title, s.is_done FROM subtasks s "
+        "JOIN tasks t ON t.id = s.task_id WHERE s.id = ? AND t.user_id = ?",
+        (subtask_id, user_id)).fetchone()
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Subtask not found")
+    return row
+
+
+@app.post("/tasks/{task_id}/subtasks", response_model=TaskOut, status_code=201, tags=["subtasks"])
+def add_subtask(task_id: int, body: SubtaskCreate, user=Depends(current_user),
+                db: Database = Depends(get_db)):
+    get_own_task(db, task_id, user["id"])   # 404, якщо задача чужа
+    position = db.execute("SELECT COALESCE(MAX(position), -1) AS m FROM subtasks WHERE task_id = ?",
+                          (task_id,)).fetchone()["m"] + 1
+    db.execute("INSERT INTO subtasks (task_id, title, is_done, position) VALUES (?, ?, 0, ?)",
+               (task_id, body.title, position))
+    db.commit()
+    return task_response(db, task_id, user["id"])
+
+
+@app.patch("/subtasks/{subtask_id}", response_model=TaskOut, tags=["subtasks"])
+def update_subtask(subtask_id: int, body: SubtaskUpdate, user=Depends(current_user),
+                   db: Database = Depends(get_db)):
+    sub = get_own_subtask(db, subtask_id, user["id"])
+    changes: dict = {}
+    if body.title is not None:
+        if not body.title.strip():
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Title is required")
+        changes["title"] = body.title.strip()
+    if body.is_done is not None:
+        changes["is_done"] = 1 if body.is_done else 0
+    if changes:
+        sets = ", ".join(f"{k} = ?" for k in changes)
+        db.execute(f"UPDATE subtasks SET {sets} WHERE id = ?", (*changes.values(), subtask_id))
+        db.commit()
+    return task_response(db, sub["task_id"], user["id"])
+
+
+@app.delete("/subtasks/{subtask_id}", response_model=TaskOut, tags=["subtasks"])
+def delete_subtask(subtask_id: int, user=Depends(current_user),
+                   db: Database = Depends(get_db)):
+    sub = get_own_subtask(db, subtask_id, user["id"])
+    db.execute("DELETE FROM subtasks WHERE id = ?", (subtask_id,))
+    db.commit()
+    return task_response(db, sub["task_id"], user["id"])
 
 
 # --- Stats (More → Productivity) ---

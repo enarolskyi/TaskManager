@@ -81,6 +81,16 @@ tasks = Table(
     Column("tag", Text, nullable=False, server_default="General"),
     Column("due_date", Text, nullable=False),
     Column("completed_at", Text),
+    Column("recurrence", Text, nullable=False, server_default="none"),   # none/daily/weekly/monthly
+)
+
+subtasks = Table(
+    "subtasks", metadata,
+    Column("id", Integer, primary_key=True),
+    Column("task_id", Integer, ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False),
+    Column("title", Text, nullable=False),
+    Column("is_done", Integer, nullable=False, server_default="0"),   # 0/1 — портативно між базами
+    Column("position", Integer, nullable=False, server_default="0"),
 )
 
 user_settings = Table(
@@ -116,6 +126,7 @@ def _migrate():
         ("tasks", "completed_at", "TEXT"),
         ("user_settings", "daily_goal", "INTEGER NOT NULL DEFAULT 5"),
         ("user_settings", "weekly_goal", "INTEGER NOT NULL DEFAULT 30"),
+        ("tasks", "recurrence", "TEXT NOT NULL DEFAULT 'none'"),
     ]
     with engine.begin() as conn:
         for table_, column, decl in additions:

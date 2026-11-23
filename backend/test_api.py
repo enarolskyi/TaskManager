@@ -569,3 +569,123 @@ def test_reset_unknown_email(client, sent_emails):
 @pytest.mark.parametrize("code,password", [("12345", "NewPass123"), ("abcdef", "NewPass123"), ("123456", "weak")])
 def test_reset_validation(client, auth_headers, code, password):
     assert do_reset(client, code, password).status_code == 422
+
+
+# ---------- Recurring tasks ----------
+
+def test_create_with_recurrence(client, auth_headers):
+    r = client.post("/tasks", json={**NEW_TASK, "recurrence": "weekly"}, headers=auth_headers)
+    assert r.status_code == 201
+    assert r.json()["recurrence"] == "weekly"
+
+
+def test_completing_recurring_spawns_next(client, auth_headers):
+    tid = client.post("/tasks", json={**NEW_TASK, "due_date": "2026-11-20", "recurrence": "weekly"},
+                      headers=auth_headers).json()["id"]
+    complete(client, auth_headers, tid)
+    tasks = client.get("/tasks", headers=auth_headers).json()
+    done = [t for t in tasks if t["status"] == "done"]
+    todo = [t for t in tasks if t["status"] == "todo"]
+    assert len(done) == 1 and len(todo) == 1
+    assert todo[0]["due_date"] == "2026-11-27"        # +7 днів
+    assert todo[0]["recurrence"] == "weekly"
+
+
+def test_completing_non_recurring_does_not_spawn(client, auth_headers):
+    complete(client, auth_headers, new_task(client, auth_headers))
+    assert len(client.get("/tasks", headers=auth_headers).json()) == 1
+
+
+def test_recurring_spawns_once(client, auth_headers):
+    tid = client.post("/tasks", json={**NEW_TASK, "due_date": "2026-11-20", "recurrence": "daily"},
+                      headers=auth_headers).json()["id"]
+    complete(client, auth_headers, tid)
+    complete(client, auth_headers, tid)   # вже done → без нової копії
+    assert len(client.get("/tasks", headers=auth_headers).json()) == 2
+
+
+@pytest.mark.parametrize("due,recur,expected", [
+    ("2026-11-20", "daily", "2026-11-21"),
+    ("2026-01-31", "monthly", "2026-02-28"),   # кінець місяця
+])
+def test_recurrence_next_due(client, auth_headers, due, recur, expected):
+    tid = client.post("/tasks", json={**NEW_TASK, "due_date": due, "recurrence": recur},
+                      headers=auth_headers).json()["id"]
+    complete(client, auth_headers, tid)
+    todo = [t for t in client.get("/tasks", headers=auth_headers).json() if t["status"] == "todo"]
+    assert todo[0]["due_date"] == expected
+
+
+def test_invalid_recurrence(client, auth_headers):
+    assert client.post("/tasks", json={**NEW_TASK, "recurrence": "yearly"},
+                       headers=auth_headers).status_code == 422
+
+
+# ---------- Subtasks ----------
+
+def add_subtask(client, headers, task_id, title="Step"):
+    return client.post(f"/tasks/{task_id}/subtasks", json={"title": title}, headers=headers)
+
+
+def test_add_subtask(client, auth_headers):
+    tid = new_task(client, auth_headers)
+    r = add_subtask(client, auth_headers, tid, "Step 1")
+    assert r.status_code == 201
+    subs = r.json()["subtasks"]
+    assert len(subs) == 1
+    assert subs[0]["title"] == "Step 1"
+    assert subs[0]["is_done"] is False
+
+
+def test_subtasks_appear_in_list_in_order(client, auth_headers):
+    tid = new_task(client, auth_headers)
+    add_subtask(client, auth_headers, tid, "a")
+    add_subtask(client, auth_headers, tid, "b")
+    task = [t for t in client.get("/tasks", headers=auth_headers).json() if t["id"] == tid][0]
+    assert [s["title"] for s in task["subtasks"]] == ["a", "b"]
+
+
+def test_toggle_subtask(client, auth_headers):
+    tid = new_task(client, auth_headers)
+    sid = add_subtask(client, auth_headers, tid).json()["subtasks"][0]["id"]
+    r = client.patch(f"/subtasks/{sid}", json={"is_done": True}, headers=auth_headers)
+    assert r.json()["subtasks"][0]["is_done"] is True
+    r = client.patch(f"/subtasks/{sid}", json={"is_done": False}, headers=auth_headers)
+    assert r.json()["subtasks"][0]["is_done"] is False
+
+
+def test_rename_subtask(client, auth_headers):
+    tid = new_task(client, auth_headers)
+    sid = add_subtask(client, auth_headers, tid).json()["subtasks"][0]["id"]
+    r = client.patch(f"/subtasks/{sid}", json={"title": "renamed"}, headers=auth_headers)
+    assert r.json()["subtasks"][0]["title"] == "renamed"
+
+
+def test_delete_subtask(client, auth_headers):
+    tid = new_task(client, auth_headers)
+    sid = add_subtask(client, auth_headers, tid).json()["subtasks"][0]["id"]
+    r = client.delete(f"/subtasks/{sid}", headers=auth_headers)
+    assert r.status_code == 200
+    assert r.json()["subtasks"] == []
+
+
+def test_subtask_empty_title(client, auth_headers):
+    tid = new_task(client, auth_headers)
+    assert add_subtask(client, auth_headers, tid, "  ").status_code == 422
+
+
+def test_subtask_other_user_forbidden(client, auth_headers):
+    tid = new_task(client, auth_headers)
+    sid = add_subtask(client, auth_headers, tid).json()["subtasks"][0]["id"]
+    other = client.post("/auth/register", json={**VALID_USER, "email": "other2@test.com"}).json()
+    oh = {"Authorization": f"Bearer {other['token']}"}
+    assert add_subtask(client, oh, tid).status_code == 404
+    assert client.patch(f"/subtasks/{sid}", json={"is_done": True}, headers=oh).status_code == 404
+    assert client.delete(f"/subtasks/{sid}", headers=oh).status_code == 404
+
+
+def test_deleting_task_cascades_subtasks(client, auth_headers):
+    tid = new_task(client, auth_headers)
+    sid = add_subtask(client, auth_headers, tid).json()["subtasks"][0]["id"]
+    client.delete(f"/tasks/{tid}", headers=auth_headers)
+    assert client.patch(f"/subtasks/{sid}", json={"is_done": True}, headers=auth_headers).status_code == 404
