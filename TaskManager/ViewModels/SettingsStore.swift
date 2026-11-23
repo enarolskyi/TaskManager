@@ -12,6 +12,8 @@ final class SettingsStore {
     func load() async {
         do {
             settings = try await api.get("/settings")
+        } catch APIError.cancelled {
+            // запит скасовано — не помилка
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -54,6 +56,8 @@ final class SettingsStore {
         Task {
             do {
                 settings = try await api.patch("/settings", body: request)
+            } catch APIError.cancelled {
+                // скасовано — лишаємо optimistic-значення
             } catch {
                 errorMessage = error.localizedDescription
                 await load()

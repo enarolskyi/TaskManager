@@ -23,6 +23,7 @@ final class TaskStore {
     }
 
     func load() async {
+        guard !isLoading else { return }   // уникаємо зайвих одночасних запитів
         isLoading = true
         defer { isLoading = false }
         report(await perform {
@@ -88,6 +89,8 @@ final class TaskStore {
             return nil
         } catch APIError.unauthorized {
             onUnauthorized?()
+            return nil
+        } catch APIError.cancelled {
             return nil
         } catch {
             return error.localizedDescription

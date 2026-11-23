@@ -4,25 +4,57 @@ import Observation
 @Observable
 final class AuthViewModel {
 
-    var currentUser: User?
+    var currentUser: User? {
+        didSet { cacheUser(currentUser) }
+    }
     var isRestoringSession = true
 
     var isLoggedIn: Bool { currentUser != nil }
 
     private let api = APIClient.shared
+    private let userCacheKey = "cachedUser"
 
-    /// Відновлення сесії за збереженим токеном
+    /// Відновлення сесії за збереженим токеном.
+    /// Якщо юзер є в кеші — одразу показуємо застосунок і перевіряємо токен у фоні,
+    /// щоб не блокувати старт на холодному старті сервера.
     func restoreSession() async {
-        defer { isRestoringSession = false }
-        guard api.token != nil else { return }
+        guard api.token != nil else {
+            isRestoringSession = false
+            return
+        }
 
+        if let cached = cachedUser() {
+            currentUser = cached
+            isRestoringSession = false
+            await verifyToken()   // фонова перевірка: оновить юзера або розлогінить при 401
+        } else {
+            await verifyToken()
+            isRestoringSession = false
+        }
+    }
+
+    /// Перевіряє токен запитом /me. 401 → вихід; мережа недоступна → лишаємо як є
+    private func verifyToken() async {
         do {
-            let user: User = try await api.get("/me")
-            currentUser = user
+            currentUser = try await api.get("/me")
         } catch APIError.unauthorized {
-            api.token = nil
+            forceLogout()
         } catch {
-            // сервер недоступний — токен не скидаємо
+            // недоступний сервер або скасування — нічого не робимо
+        }
+    }
+
+    // Кеш юзера — щоб показати застосунок одразу при наступному запуску
+    private func cachedUser() -> User? {
+        guard let data = UserDefaults.standard.data(forKey: userCacheKey) else { return nil }
+        return try? JSONDecoder().decode(User.self, from: data)
+    }
+
+    private func cacheUser(_ user: User?) {
+        if let user, let data = try? JSONEncoder().encode(user) {
+            UserDefaults.standard.set(data, forKey: userCacheKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: userCacheKey)
         }
     }
 
@@ -123,6 +155,8 @@ final class AuthViewModel {
             return nil
         } catch APIError.unauthorized {
             forceLogout()
+            return nil
+        } catch APIError.cancelled {
             return nil
         } catch {
             return error.localizedDescription

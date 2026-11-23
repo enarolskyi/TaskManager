@@ -72,6 +72,8 @@ struct ProductivityView: View {
             errorMessage = nil
         } catch APIError.unauthorized {
             auth.forceLogout()
+        } catch APIError.cancelled {
+            // скасовано — не помилка
         } catch {
             errorMessage = error.localizedDescription
         }

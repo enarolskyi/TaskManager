@@ -5,6 +5,7 @@ enum APIError: LocalizedError {
     case unauthorized
     case network
     case decoding
+    case cancelled   // запит скасовано (напр. перемкнули таб) — не помилка, ігноруємо
 
     var errorDescription: String? {
         switch self {
@@ -12,6 +13,7 @@ enum APIError: LocalizedError {
         case .unauthorized: "Session expired. Please log in again"
         case .network: "Can't reach the server. Is the backend running?"
         case .decoding: "Unexpected server response"
+        case .cancelled: nil
         }
     }
 }
@@ -40,6 +42,16 @@ final class APIClient {
         return URL(string: "http://\(macIP):8000")!
         #endif
     }
+
+    // Довший таймаут під холодний старт Render (сервіс прокидається 30–60 с),
+    // waitsForConnectivity — чекати мережу, а не падати одразу
+    private let session: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 90
+        config.timeoutIntervalForResource = 120
+        config.waitsForConnectivity = true
+        return URLSession(configuration: config)
+    }()
 
     // TODO: перенести токен у Keychain
     var token: String? {
@@ -123,10 +135,29 @@ final class APIClient {
             print("   body: \(Self.prettyJSON(body))")
         }
 
+        // GET безпечно повторити: якщо сервер ще прокидається, перша спроба може не дійти
+        let maxAttempts = method == "GET" ? 2 : 1
+        for attempt in 1...maxAttempts {
+            do {
+                return try await send(request, path: path)
+            } catch APIError.network where attempt < maxAttempts {
+                try? await Task.sleep(for: .seconds(2))   // дати сервісу прокинутись і повторити
+                continue
+            }
+        }
+        throw APIError.network   // недосяжно, але потрібне компілятору
+    }
+
+    private func send(_ request: URLRequest, path: String) async throws -> Data {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await URLSession.shared.data(for: request)
+            (data, response) = try await session.data(for: request)
+        } catch is CancellationError {
+            throw APIError.cancelled
+        } catch let error as URLError where error.code == .cancelled {
+            // Запит скасовано (перемкнули таб) — це не збій сервера
+            throw APIError.cancelled
         } catch {
             print("❌ Network error: \(error.localizedDescription)")
             throw APIError.network
